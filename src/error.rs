@@ -2,18 +2,17 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
-/// Raft library errors.
+/// Raft 库错误类型。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Error {
-    /// The operation was aborted and must be retried. This typically happens
-    /// with e.g. Raft leader changes. This is used instead of implementing
-    /// complex retry logic and replay protection in Raft.
+    /// 操作被中止，必须重试。常见于 Raft 领导者变更等场景。
+    /// 用此错误代替在 Raft 内实现复杂的重试与重放保护逻辑。
     Abort,
-    /// Invalid data, typically decoding errors or unexpected internal values.
+    /// 非法数据，通常是解码错误或意外的内部值。
     InvalidData(String),
-    /// Invalid user input.
+    /// 非法用户输入。
     InvalidInput(String),
-    /// An IO error.
+    /// IO 错误。
     IO(String),
 }
 
@@ -31,38 +30,38 @@ impl Display for Error {
 }
 
 impl Error {
-    /// Returns whether the error is considered deterministic. Raft state
-    /// machine application needs to know whether a command failure is
-    /// deterministic on the input command -- if it is, the command can be
-    /// considered applied and the error returned to the client, but otherwise
-    /// the state machine must panic to prevent node divergence.
+    /// 判断错误是否为确定性错误。
+    ///
+    /// Raft 状态机应用需要知道命令失败是否由输入命令本身决定：
+    /// 若是，则该命令可视为已应用，错误可返回给客户端；
+    /// 否则状态机必须 panic，以免节点状态分叉。
     pub fn is_deterministic(&self) -> bool {
         match self {
-            // Aborts don't happen during application, only leader changes.
+            // Abort 不会在应用阶段发生，只在领导者变更时出现。
             Error::Abort => false,
-            // Possible data corruption local to this node.
+            // 可能是本节点本地数据损坏。
             Error::InvalidData(_) => false,
-            // Input errors are (likely) deterministic.
+            // 输入错误（大概率）是确定性的。
             Error::InvalidInput(_) => true,
-            // IO errors are typically local to the node (e.g. faulty disk).
+            // IO 错误通常是节点本地问题（例如磁盘故障）。
             Error::IO(_) => false,
         }
     }
 }
 
-/// Constructs an Error::InvalidData for the given format string.
+/// 按格式字符串构造 `Error::InvalidData`。
 #[macro_export]
 macro_rules! errdata {
     ($($args:tt)*) => { $crate::error::Error::InvalidData(format!($($args)*)).into() };
 }
 
-/// Constructs an Error::InvalidInput for the given format string.
+/// 按格式字符串构造 `Error::InvalidInput`。
 #[macro_export]
 macro_rules! errinput {
     ($($args:tt)*) => { $crate::error::Error::InvalidInput(format!($($args)*)).into() };
 }
 
-/// A Result returning Error.
+/// 返回 [`Error`] 的 Result 别名。
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl<T> From<Error> for Result<T> {
@@ -145,8 +144,8 @@ impl From<std::num::TryFromIntError> for Error {
 
 impl<T> From<std::sync::PoisonError<T>> for Error {
     fn from(err: std::sync::PoisonError<T>) -> Self {
-        // This only happens when a different thread panics while holding a
-        // mutex. This should be fatal, so we panic here too.
+        // 只有在其他线程持有互斥锁时 panic 才会发生。
+        // 这种情况应视为致命错误，因此这里同样 panic。
         panic!("{err}")
     }
 }

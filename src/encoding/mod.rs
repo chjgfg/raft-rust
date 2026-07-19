@@ -1,7 +1,7 @@
-//! Binary data encodings.
+//! 二进制数据编码。
 //!
-//! * keycode: used for keys in the key/value store.
-//! * bincode: used for values in the key/value store and network protocols.
+//! * keycode：用于键值存储中的键。
+//! * bincode：用于键值存储中的值以及网络协议。
 
 pub mod bincode;
 pub mod keycode;
@@ -16,52 +16,49 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
-/// Adds automatic Keycode encode/decode methods to key enums. These are used
-/// as keys in the key/value store.
+/// 为键枚举自动提供 Keycode 编解码方法。这些类型用作键值存储中的键。
 pub trait Key<'de>: Serialize + Deserialize<'de> {
-    /// Decodes a key from a byte slice using Keycode.
+    /// 使用 Keycode 从字节切片解码键。
     fn decode(bytes: &'de [u8]) -> Result<Self> {
         keycode::deserialize(bytes)
     }
 
-    /// Encodes a key to a byte vector using Keycode.
+    /// 使用 Keycode 将键编码为字节向量。
     fn encode(&self) -> Vec<u8> {
         keycode::serialize(self)
     }
 }
 
-/// Adds automatic Bincode encode/decode methods to value types. These are used
-/// for values in key/value storage engines, and also for e.g. network protocol
-/// messages and other values.
+/// 为值类型自动提供 Bincode 编解码方法。用于键值存储引擎中的值，
+/// 以及网络协议消息等其它值。
 pub trait Value: Serialize + DeserializeOwned {
-    /// Decodes a value from a byte slice using Bincode.
+    /// 使用 Bincode 从字节切片解码值。
     fn decode(bytes: &[u8]) -> Result<Self> {
         bincode::deserialize(bytes)
     }
 
-    /// Decodes a value from a reader using Bincode.
+    /// 使用 Bincode 从 reader 解码值。
     fn decode_from<R: Read>(reader: R) -> Result<Self> {
         bincode::deserialize_from(reader)
     }
 
-    /// Decodes a value from a reader using Bincode, or returns None if the
-    /// reader is closed.
+    /// 使用 Bincode 从 reader 解码值；若 reader 已关闭则返回 None。
     fn maybe_decode_from<R: Read>(reader: R) -> Result<Option<Self>> {
         bincode::maybe_deserialize_from(reader)
     }
 
-    /// Encodes a value to a byte vector using Bincode.
+    /// 使用 Bincode 将值编码为字节向量。
     fn encode(&self) -> Vec<u8> {
         bincode::serialize(self)
     }
 
-    /// Encodes a value into a writer using Bincode.
+    /// 使用 Bincode 将值写入 writer。
     fn encode_into<W: Write>(&self, writer: W) -> Result<()> {
         bincode::serialize_into(writer, self)
     }
 }
 
-/// Blanket implementations for various types wrapping a value type.
+/// 对包装值类型的常见容器提供 blanket 实现。
 impl<V: Value> Value for Option<V> {}
 impl<V: Value> Value for Result<V> {}
 impl<V: Value> Value for Vec<V> {}

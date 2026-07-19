@@ -14,23 +14,23 @@ use super::{ELECTION_TIMEOUT_RANGE, HEARTBEAT_INTERVAL, MAX_APPEND_ENTRIES};
 use crate::errinput;
 use crate::error::{Error, Result};
 
-/// A node ID, unique within a cluster. Assigned manually when started.
+/// 节点 ID，在集群内唯一。启动时手动分配。
 pub type NodeID = u8;
 
-/// A leader term number. Increases monotonically on elections.
+/// 领导者任期号。选举时单调递增。
 pub type Term = u64;
 
-/// A logical clock interval as number of ticks.
+/// 逻辑时钟间隔，以 tick 数量表示。
 pub type Ticks = u8;
 
-/// Raft node options.
+/// Raft 节点选项。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
-    /// The number of ticks between leader heartbeats.
+    /// 领导者心跳之间的 tick 数。
     pub heartbeat_interval: Ticks,
-    /// The range of randomized election timeouts for followers and candidates.
+    /// 跟随者与候选人的随机选举超时范围。
     pub election_timeout_range: Range<Ticks>,
-    /// Maximum number of entries to send in a single Append message.
+    /// 单条 Append 消息中最多发送的条目数。
     pub max_append_entries: usize,
 }
 
@@ -44,32 +44,32 @@ impl Default for Options {
     }
 }
 
-/// A Raft node with a dynamic role. This implements the Raft distributed
-/// consensus protocol, see the `raft` module documentation for more info.
+/// 具有动态角色的 Raft 节点。实现 Raft 分布式
+/// 共识协议，详见 `raft` 模块文档。
 ///
-/// The node is driven synchronously by processing inbound messages via `step()`
-/// and by advancing time via `tick()`. These methods consume the node and
-/// return a new one with a possibly different role. Outbound messages are sent
-/// via the given `tx` channel, and must be delivered to peers or clients.
+/// 节点由 `step()` 处理入站消息、
+/// 由 `tick()` 推进时间同步驱动。这些方法消费节点，
+/// 并返回可能具有不同角色的新节点。出站消息
+/// 经给定 `tx` 通道发送，须投递给同伴或客户端。
 ///
-/// This enum is the public interface to the node, with a closed set of roles.
-/// It wraps the `RawNode<Role>` types, which implement the actual node logic.
-/// The enum allows ergonomic use across role transitions since it can represent
-/// all roles, e.g.: `node = node.step()?`.
+/// 该枚举是节点的公开接口，角色集合封闭。
+/// 它包装实现实际逻辑的 `RawNode<Role>`。
+/// 枚举可表示所有角色，因此角色转换时使用方便，
+/// 例如：`node = node.step()?`。
 pub enum Node {
-    /// A candidate campaigns for leadership.
+    /// 候选人竞选领导者。
     Candidate(RawNode<Candidate>),
-    /// A follower replicates entries from a leader.
+    /// 跟随者从领导者复制条目。
     Follower(RawNode<Follower>),
-    /// A leader processes client requests and replicates entries to followers.
+    /// 领导者处理客户端请求并向跟随者复制条目。
     Leader(RawNode<Leader>),
 }
 
 impl Node {
-    /// Creates a new Raft node. It starts as a leaderless follower, waiting to
-    /// hear from a leader or otherwise transitioning to candidate and
-    /// campaigning for leadership. In the case of a single-node cluster (no
-    /// peers), the node immediately transitions to leader when created.
+    /// 创建新的 Raft 节点。以无领导者的跟随者起步，等待
+    /// 领导者消息，否则转为候选人并
+    /// 竞选。单节点集群（无
+    /// 同伴）创建时立即成为领导者。
     pub fn new(
         id: NodeID,
         peers: HashSet<NodeID>,
@@ -79,14 +79,14 @@ impl Node {
         opts: Options,
     ) -> Result<Self> {
         let node = RawNode::new(id, peers, log, state, tx, opts)?;
-        // If this is a single-node cluster, become leader immediately.
+        // 单节点集群立即成为领导者。
         if node.cluster_size() == 1 {
             return Ok(node.into_candidate()?.into_leader()?.into());
         }
         Ok(node.into())
     }
 
-    /// Returns the node's ID.
+    /// 返回节点 ID。
     pub fn id(&self) -> NodeID {
         match self {
             Self::Candidate(node) => node.id,
@@ -95,7 +95,7 @@ impl Node {
         }
     }
 
-    /// Returns the node's term.
+    /// 返回节点任期。
     pub fn term(&self) -> Term {
         match self {
             Self::Candidate(node) => node.term(),
@@ -104,7 +104,7 @@ impl Node {
         }
     }
 
-    /// Processes an inbound message.
+    /// 处理入站消息。
     pub fn step(self, msg: Envelope) -> Result<Self> {
         let peers = match &self {
             Self::Candidate(node) => &node.peers,
@@ -122,7 +122,7 @@ impl Node {
         }
     }
 
-    /// Advances time by a tick.
+    /// 将时间推进一个 tick。
     pub fn tick(self) -> Result<Self> {
         match self {
             Self::Candidate(node) => node.tick(),
@@ -150,34 +150,34 @@ impl From<RawNode<Leader>> for Node {
     }
 }
 
-/// Marker trait for a Raft role: leader, follower, or candidate.
+/// Raft 角色的标记 trait：领导者、跟随者或候选人。
 pub trait Role {}
 
-/// A Raft node with role R.
+/// 角色为 R 的 Raft 节点。
 ///
-/// This implements the typestate pattern, where individual node states (roles)
-/// are encoded as RawNode<Role>. See http://cliffle.com/blog/rust-typestate/.
+/// 采用 typestate 模式，各节点状态（角色）
+/// 编码为 RawNode<Role>。参见 http://cliffle.com/blog/rust-typestate/。
 pub struct RawNode<R: Role> {
-    /// The node ID. Must be unique in the cluster.
+    /// 节点 ID。在集群内必须唯一。
     id: NodeID,
-    /// The IDs of the other nodes in the cluster. Does not change while
-    /// running. Can change on restart, but all nodes must have the same set of
-    /// nodes, otherwise it can result in multiple leaders (split brain).
+    /// 集群中其它节点的 ID。运行期间
+    /// 不变。重启时可变更，但所有节点必须有相同
+    /// 节点集合，否则可能产生多领导者（脑裂）。
     peers: HashSet<NodeID>,
-    /// The Raft log, which stores client commands to be executed.
+    /// Raft 日志，保存待执行的客户端命令。
     log: Log,
-    /// The Raft state machine, which executes client commands from the log.
+    /// Raft 状态机，从日志执行客户端命令。
     state: Box<dyn State>,
-    /// Channel for sending outbound messages to other nodes.
+    /// 向其它节点发送出站消息的通道。
     tx: Sender<Envelope>,
-    /// Node options.
+    /// 节点选项。
     opts: Options,
-    /// Role-specific state.
+    /// 角色相关状态。
     role: R,
 }
 
 impl<R: Role> RawNode<R> {
-    /// Helper for role transitions.
+    /// 角色转换辅助方法。
     fn into_role<T: Role>(self, role: T) -> RawNode<T> {
         RawNode {
             id: self.id,
@@ -190,48 +190,48 @@ impl<R: Role> RawNode<R> {
         }
     }
 
-    /// Returns the node's current term.
+    /// 返回节点当前任期。
     fn term(&self) -> Term {
         self.log.get_term_vote().0
     }
 
-    /// Returns the cluster size as number of nodes.
+    /// 返回集群节点数。
     fn cluster_size(&self) -> usize {
         self.peers.len() + 1
     }
 
-    /// Returns the cluster quorum size (strict majority).
+    /// 返回集群法定人数（严格多数）。
     fn quorum_size(&self) -> usize {
         self.cluster_size() / 2 + 1
     }
 
-    /// Returns the quorum value (i.e. median) of the given unsorted vector. It
-    /// must have the same length as the cluster size.
+    /// 返回给定未排序向量的法定人数值（即中位数）。
+    /// 长度必须等于集群大小。
     fn quorum_value<T: Ord + Copy>(&self, mut values: Vec<T>) -> T {
         assert_eq!(values.len(), self.cluster_size(), "vector size must match cluster size");
         *values.select_nth_unstable_by(self.quorum_size() - 1, |a, b| a.cmp(b).reverse()).1
     }
 
-    /// Generates a random election timeout.
+    /// 生成随机选举超时。
     fn random_election_timeout(&self) -> Ticks {
         rand::rng().random_range(self.opts.election_timeout_range.clone())
     }
 
-    /// Sends a message to the given recipient.
+    /// 向给定接收方发送消息。
     fn send(&self, to: NodeID, message: Message) -> Result<()> {
         Self::send_via(&self.tx, Envelope { from: self.id, to, term: self.term(), message })
     }
 
-    /// Sends a message via the given channel. This avoid borrowing self, to
-    /// allow sending while holding partial borrows of self.
+    /// 经给定通道发送消息。避免借用 self，
+    /// 以便在持有 self 部分借用时仍可发送。
     fn send_via(tx: &Sender<Envelope>, msg: Envelope) -> Result<()> {
         debug!("Sending {msg:?}");
         Ok(tx.send(msg)?)
     }
 
-    /// Broadcasts a message to all peers.
+    /// 向所有同伴广播消息。
     fn broadcast(&self, message: Message) -> Result<()> {
-        // Send in increasing ID order for test determinism.
+        // 按 ID 升序发送，保证测试确定性。
         for id in self.peers.iter().copied().sorted() {
             self.send(id, message.clone())?;
         }
@@ -239,23 +239,23 @@ impl<R: Role> RawNode<R> {
     }
 }
 
-/// A follower replicates log entries from a leader and forwards client requests
-/// to it. Nodes start as leaderless followers, until they either discover a
-/// leader or hold an election.
+/// 跟随者从领导者复制日志，并将客户端请求
+/// 转发给它。节点以无领导者的跟随者起步，直到发现
+/// 领导者或发起选举。
 pub struct Follower {
-    /// The leader, or None if we're a leaderless follower.
+    /// 领导者；若为无领导者的跟随者则为 None。
     leader: Option<NodeID>,
-    /// The number of ticks since the last message from the leader.
+    /// 自上次收到领导者消息以来经过的 tick 数。
     leader_seen: Ticks,
-    /// The leader_seen timeout before triggering an election.
+    /// 触发选举前的 leader_seen 超时。
     election_timeout: Ticks,
-    // Local client requests that have been forwarded to the leader. These are
-    // aborted on leader/term changes.
+    // 已转发给领导者的本地客户端请求。
+    // 领导者/任期变更时会中止。
     forwarded: HashSet<RequestID>,
 }
 
 impl Follower {
-    /// Creates a new follower role.
+    /// 创建新的跟随者角色。
     fn new(leader: Option<NodeID>, election_timeout: Ticks) -> Self {
         Self { leader, leader_seen: 0, election_timeout, forwarded: HashSet::new() }
     }
@@ -264,7 +264,7 @@ impl Follower {
 impl Role for Follower {}
 
 impl RawNode<Follower> {
-    /// Creates a new node as a leaderless follower.
+    /// 创建无领导者的跟随者节点。
     fn new(
         id: NodeID,
         peers: HashSet<NodeID>,
@@ -280,25 +280,25 @@ impl RawNode<Follower> {
         let mut node = Self { id, peers, log, state, tx, opts, role };
         node.role.election_timeout = node.random_election_timeout();
 
-        // Apply any pending entries following restart. State machine writes are
-        // not flushed to durable storage, so a tail of writes may be lost if
-        // the host crashes or restarts. The Raft log is durable, so we can
-        // always recover the state from it. We reapply any missing entries here
-        // if that should happen.
+        // 重启后应用待处理条目。状态机写入
+        // 不刷持久存储，主机崩溃或重启可能丢失
+        // 尾部写入。Raft 日志是持久的，总可
+        // 从中恢复状态。此处重新应用
+        // 缺失条目。
         node.maybe_apply()?;
         Ok(node)
     }
 
-    /// Transitions the follower into a candidate, by campaigning for
-    /// leadership in a new term.
+    /// 将跟随者转为候选人，通过
+    /// 在新任期竞选领导者。
     fn into_candidate(mut self) -> Result<RawNode<Candidate>> {
-        // Abort any forwarded requests. These must be retried with new leader.
+        // 中止所有已转发请求。须向新领导者重试。
         self.abort_forwarded()?;
 
-        // Apply any pending log entries, so that we're caught up if we win.
+        // 应用待处理日志，以便若当选时已追上。
         self.maybe_apply()?;
 
-        // Become candidate and campaign.
+        // 成为候选人并发起竞选。
         let election_timeout = self.random_election_timeout();
         let mut node = self.into_role(Candidate::new(election_timeout));
         node.campaign()?;
@@ -311,24 +311,24 @@ impl RawNode<Follower> {
         Ok(node)
     }
 
-    /// Transitions the follower into either a leaderless follower in a new term
-    /// (e.g. if someone holds a new election) or a follower of a current leader.
+    /// 将跟随者转为新任期的无领导者跟随者
+    /// （例如有人发起新选举），或转为当前领导者的跟随者。
     fn into_follower(mut self, term: Term, leader: Option<NodeID>) -> Result<RawNode<Follower>> {
         assert_ne!(term, 0, "can't become follower in term 0");
 
-        // Abort any forwarded requests. These must be retried with new leader.
+        // 中止所有已转发请求。须向新领导者重试。
         self.abort_forwarded()?;
 
         if let Some(leader) = leader {
-            // We found a leader in the current term.
+            // 在当前任期发现领导者。
             assert!(self.peers.contains(&leader), "leader is not a peer");
             assert_eq!(self.role.leader, None, "already have leader in term");
             assert_eq!(term, self.term(), "can't follow leader in different term");
             info!("Following leader {leader} in term {term}");
             self.role = Follower::new(Some(leader), self.role.election_timeout);
         } else {
-            // We found a new term, but we don't know who the leader is yet.
-            // We'll find out if we step a message from it.
+            // 发现新任期，但尚不知领导者是谁。
+            // 处理来自它的消息时会得知。
             assert_ne!(term, self.term(), "can't become leaderless follower in current term");
             info!("Discovered new term {term}");
             self.log.set_term_vote(term, None)?;
@@ -337,94 +337,94 @@ impl RawNode<Follower> {
         Ok(self)
     }
 
-    /// Processes an inbound message.
+    /// 处理入站消息。
     fn step(mut self, msg: Envelope) -> Result<Node> {
-        // Past term: outdated peer, drop the message.
+        // 过去任期：过时同伴，丢弃消息。
         if msg.term < self.term() {
             debug!("Dropping message from past term: {msg:?}");
             return Ok(self.into());
         }
-        // Future term: newer leader or candidate, become leaderless follower
-        // and step the message.
+        // 未来任期：更新的领导者或候选人，成为无领导者跟随者
+        // 并处理该消息。
         if msg.term > self.term() {
             return self.into_follower(msg.term, None)?.step(msg);
         }
 
-        // Record when we last saw a message from the leader (if any).
+        // 记录上次收到领导者消息的时间（若有）。
         if Some(msg.from) == self.role.leader {
             self.role.leader_seen = 0
         }
 
         match msg.message {
-            // The leader sends periodic heartbeats. If we don't have a leader
-            // yet, follow it. If the commit_index advances, apply commands.
+            // 领导者发送周期性心跳。若尚无领导者
+            // 则跟随它。若 commit_index 推进则应用命令。
             Message::Heartbeat { last_index, commit_index, read_seq } => {
                 assert!(commit_index <= last_index, "commit_index after last_index");
 
-                // Make sure the heartbeat is from our leader, or follow it.
+                // 确认心跳来自我们的领导者，否则跟随它。
                 match self.role.leader {
                     Some(leader) => assert_eq!(msg.from, leader, "multiple leaders in term"),
                     None => self = self.into_follower(msg.term, Some(msg.from))?,
                 }
 
-                // Check if our log matches the leader's log up to last_index,
-                // and respond to the heartbeat. last_index always has the
-                // leader's term, since it only appends entries in its term.
+                // 检查本地日志到 last_index 是否与领导者匹配，
+                // 并响应心跳。last_index 总是
+                // 领导者任期，因为领导者只在本任期追加条目。
                 let match_index = if self.log.has(last_index, msg.term)? { last_index } else { 0 };
                 self.send(msg.from, Message::HeartbeatResponse { match_index, read_seq })?;
 
-                // Advance the commit index and apply entries. We can only do
-                // this if we matched the leader's last_index, which implies
-                // that the logs are identical up to match_index. This also
-                // implies that the commit_index is present in our log.
+                // 推进 commit 索引并应用条目。仅当
+                // 匹配领导者 last_index 时才能做，这意味着
+                // 日志到 match_index 一致，也意味着
+                // commit_index 在本地日志中。
                 if match_index != 0 && commit_index > self.log.get_commit_index().0 {
                     self.log.commit(commit_index)?;
                     self.maybe_apply()?;
                 }
             }
 
-            // Append log entries from the leader to the local log.
+            // 将领导者的日志条目追加到本地日志。
             Message::Append { base_index, base_term, entries } => {
                 if let Some(first) = entries.first() {
                     assert_eq!(base_index, first.index - 1, "base index mismatch");
                 }
 
-                // Make sure the append is from our leader, or follow it.
+                // 确认 append 来自我们的领导者，否则跟随它。
                 match self.role.leader {
                     Some(leader) => assert_eq!(msg.from, leader, "multiple leaders in term"),
                     None => self = self.into_follower(msg.term, Some(msg.from))?,
                 }
 
-                // If the base entry matches our log, append the entries.
+                // 若 base 条目匹配本地日志，则追加条目。
                 if base_index == 0 || self.log.has(base_index, base_term)? {
                     let match_index = entries.last().map(|e| e.index).unwrap_or(base_index);
                     self.log.splice(entries)?;
                     self.send(msg.from, Message::AppendResponse { match_index, reject_index: 0 })?;
                 } else {
-                    // Otherwise, reject the base index. If the local log is
-                    // shorter than the base index, lower the reject index to
-                    // skip all missing entries.
+                    // 否则拒绝 base 索引。若本地日志
+                    // 短于 base 索引，降低 reject 索引以
+                    // 跳过缺失条目。
                     let reject_index = min(base_index, self.log.get_last_index().0 + 1);
                     self.send(msg.from, Message::AppendResponse { reject_index, match_index: 0 })?;
                 }
             }
 
-            // Confirm the leader's read sequence number.
+            // 确认领导者的读序列号。
             Message::Read { seq } => {
-                // Make sure the read is from our leader, or follow it.
+                // 确认读请求来自我们的领导者，否则跟随它。
                 match self.role.leader {
                     Some(leader) => assert_eq!(msg.from, leader, "multiple leaders in term"),
                     None => self = self.into_follower(msg.term, Some(msg.from))?,
                 }
 
-                // Confirm the read.
+                // 确认读。
                 self.send(msg.from, Message::ReadResponse { seq })?;
             }
 
-            // A candidate is requesting our vote. We only grant one per term.
+            // 候选人请求我们的选票。每个任期只投一票。
             Message::Campaign { last_index, last_term } => {
-                // Don't vote if we already voted for someone else in this term.
-                // We can repeat our vote for the same node though.
+                // 若本任期已投给他人则不再投票。
+                // 可对同一节点重复投票。
                 if let (_, Some(vote)) = self.log.get_term_vote()
                     && msg.from != vote
                 {
@@ -432,25 +432,25 @@ impl RawNode<Follower> {
                     return Ok(self.into());
                 }
 
-                // Only vote if the candidate's log is at least as long as ours.
-                // At least one node in any quorum must have all committed
-                // entries, and this ensures we'll only elect a leader that has
-                // all committed entries. See section 5.4.1 in the Raft paper.
+                // 仅当候选人日志至少与我们一样新时才投票。
+                // 任何法定人数中至少有一个节点拥有全部已提交
+                // 条目，这保证只选出拥有全部已提交条目的
+                // 领导者。见论文 5.4.1 节。
                 let (log_index, log_term) = self.log.get_last_index();
                 if log_term > last_term || log_term == last_term && log_index > last_index {
                     self.send(msg.from, Message::CampaignResponse { vote: false })?;
                     return Ok(self.into());
                 }
 
-                // Grant the vote.
+                // 授予选票。
                 info!("Voting for {} in term {} election", msg.from, msg.term);
                 self.log.set_term_vote(msg.term, Some(msg.from))?;
                 self.send(msg.from, Message::CampaignResponse { vote: true })?;
             }
 
-            // Forward client requests to the leader, or abort them if there is
-            // none. These will not be retried, the client should use timeouts
-            // instead.  Local client requests use our node ID as the sender.
+            // 将客户端请求转发给领导者；若无领导者
+            // 则中止。不会内部重试，客户端应使用超时。
+            // 本地客户端请求以本节点 ID 为发送方。
             Message::ClientRequest { id, request: _ } => {
                 assert_eq!(msg.from, self.id, "client request from other node");
 
@@ -464,7 +464,7 @@ impl RawNode<Follower> {
                 }
             }
 
-            // Client responses from the leader are passed on to the client.
+            // 来自领导者的客户端响应转交给客户端。
             Message::ClientResponse { id, response } => {
                 assert_eq!(Some(msg.from), self.role.leader, "client response from non-leader");
 
@@ -473,10 +473,10 @@ impl RawNode<Follower> {
                 }
             }
 
-            // We may receive a vote after we lost an election, ignore it.
+            // 选举失败后仍可能收到选票，忽略。
             Message::CampaignResponse { .. } => {}
 
-            // We're not leader this term, so we shouldn't see these.
+            // 本任期不是领导者，不应收到这些消息。
             Message::HeartbeatResponse { .. }
             | Message::AppendResponse { .. }
             | Message::ReadResponse { .. } => {
@@ -486,9 +486,9 @@ impl RawNode<Follower> {
         Ok(self.into())
     }
 
-    /// Processes a logical clock tick.
+    /// 处理一个逻辑时钟 tick。
     fn tick(mut self) -> Result<Node> {
-        // Campaign if we haven't heard from the leader in a while.
+        // 若一段时间未收到领导者消息则发起竞选。
         self.role.leader_seen += 1;
         if self.role.leader_seen >= self.role.election_timeout {
             return Ok(self.into_candidate()?.into());
@@ -496,9 +496,9 @@ impl RawNode<Follower> {
         Ok(self.into())
     }
 
-    /// Aborts all forwarded requests (e.g. on term/leader changes).
+    /// 中止所有已转发请求（例如任期/领导者变更时）。
     fn abort_forwarded(&mut self) -> Result<()> {
-        // Sort by ID for test determinism.
+        // 按 ID 排序以保证测试确定性。
         for id in std::mem::take(&mut self.role.forwarded).into_iter().sorted() {
             debug!("Aborting forwarded request {id}");
             self.send(self.id, Message::ClientResponse { id, response: Err(Error::Abort) })?;
@@ -506,32 +506,32 @@ impl RawNode<Follower> {
         Ok(())
     }
 
-    /// Applies any pending log entries.
+    /// 应用所有待处理日志条目。
     fn maybe_apply(&mut self) -> Result<()> {
         let mut iter = self.log.scan_apply(self.state.get_applied_index());
         while let Some(entry) = iter.next().transpose()? {
             debug!("Applying {entry:?}");
-            // Throw away the result, since only the leader responds to clients.
-            // This includes errors -- any non-deterministic errors (e.g. IO
-            // errors) must panic instead to avoid node divergence.
+            // 丢弃结果，因为只有领导者向客户端响应。
+            // 错误也一样——任何非确定性错误（如 IO
+            // 错误）必须 panic，以免节点分叉。
             _ = self.state.apply(entry);
         }
         Ok(())
     }
 }
 
-/// A candidate is campaigning to become a leader.
+/// 候选人正在竞选成为领导者。
 pub struct Candidate {
-    /// Votes received (including our own).
+    /// 已收到的选票（含自己）。
     votes: HashSet<NodeID>,
-    /// Ticks elapsed since election start.
+    /// 自选举开始经过的 tick 数。
     election_duration: Ticks,
-    /// Election timeout, in ticks.
+    /// 选举超时（以 tick 计）。
     election_timeout: Ticks,
 }
 
 impl Candidate {
-    /// Creates a new candidate role.
+    /// 创建新的候选人角色。
     fn new(election_timeout: Ticks) -> Self {
         Self { votes: HashSet::new(), election_duration: 0, election_timeout }
     }
@@ -540,19 +540,19 @@ impl Candidate {
 impl Role for Candidate {}
 
 impl RawNode<Candidate> {
-    /// Transitions the candidate to a follower. We either lost the election and
-    /// follow the winner, or we discovered a new term and step into it as a
-    /// leaderless follower.
+    /// 将候选人转为跟随者。要么落选
+    /// 跟随胜者，要么发现新任期并以
+    /// 无领导者跟随者进入。
     fn into_follower(mut self, term: Term, leader: Option<NodeID>) -> Result<RawNode<Follower>> {
         let election_timeout = self.random_election_timeout();
         if let Some(leader) = leader {
-            // We lost the election, follow the winner.
+            // 落选，跟随胜者。
             assert_eq!(term, self.term(), "can't follow leader in different term");
             info!("Lost election, following leader {leader} in term {term}");
             Ok(self.into_role(Follower::new(Some(leader), election_timeout)))
         } else {
-            // We found a new term, but we don't necessarily know who the leader
-            // is yet. We'll find out when we step a message from it.
+            // 发现新任期，但尚不一定知道领导者
+            // 是谁。处理来自它的消息时会得知。
             assert_ne!(term, self.term(), "can't become leaderless follower in current term");
             info!("Discovered new term {term}");
             self.log.set_term_vote(term, None)?;
@@ -560,7 +560,7 @@ impl RawNode<Candidate> {
         }
     }
 
-    /// Transitions the candidate to a leader. We won the election.
+    /// 将候选人转为领导者。我们赢得了选举。
     fn into_leader(self) -> Result<RawNode<Leader>> {
         let (term, vote) = self.log.get_term_vote();
         assert_ne!(term, 0, "leaders can't have term 0");
@@ -571,10 +571,10 @@ impl RawNode<Candidate> {
         let (last_index, _) = self.log.get_last_index();
         let mut node = self.into_role(Leader::new(peers, last_index));
 
-        // Propose an empty command when assuming leadership, to disambiguate
-        // previous entries in the log. See section 5.4.2 in the Raft paper.
-        // We do this prior to the heartbeat, to avoid a wasted replication
-        // roundtrip if the heartbeat response indicates the peer is behind.
+        // 就任时提出空命令，以消除
+        // 日志中此前条目的歧义。见论文 5.4.2 节。
+        // 在心跳之前做，以免
+        // 心跳响应显示同伴落后时浪费一轮复制。
         node.propose(None)?;
         node.maybe_commit_and_apply()?;
         node.heartbeat()?;
@@ -582,22 +582,22 @@ impl RawNode<Candidate> {
         Ok(node)
     }
 
-    /// Processes an inbound message.
+    /// 处理入站消息。
     fn step(mut self, msg: Envelope) -> Result<Node> {
-        // Past term: outdated peer, drop the message.
+        // 过去任期：过时同伴，丢弃消息。
         if msg.term < self.term() {
             debug!("Dropping message from past term: {msg:?}");
             return Ok(self.into());
         }
-        // Future term: newer leader or candidate, become leaderless follower
-        // and step the message.
+        // 未来任期：更新的领导者或候选人，成为无领导者跟随者
+        // 并处理该消息。
         if msg.term > self.term() {
             return self.into_follower(msg.term, None)?.step(msg);
         }
 
         match msg.message {
-            // If we received a vote, record it. If the vote gives us quorum,
-            // assume leadership.
+            // 若收到选票则记录。若达到法定人数
+            // 则就任领导者。
             Message::CampaignResponse { vote: true } => {
                 self.role.votes.insert(msg.from);
                 if self.role.votes.len() >= self.quorum_size() {
@@ -605,27 +605,27 @@ impl RawNode<Candidate> {
                 }
             }
 
-            // We didn't get the vote. :(
+            // 未获得该选票。
             Message::CampaignResponse { vote: false } => {}
 
-            // Don't grant votes for other candidates.
+            // 不给其它候选人投票。
             Message::Campaign { .. } => {
                 self.send(msg.from, Message::CampaignResponse { vote: false })?
             }
 
-            // If we hear from a leader in this term, we lost the election.
-            // Follow it and step the message.
+            // 若本任期听到领导者，则落选。
+            // 跟随它并处理该消息。
             Message::Heartbeat { .. } | Message::Append { .. } | Message::Read { .. } => {
                 return self.into_follower(msg.term, Some(msg.from))?.step(msg);
             }
 
-            // Abort client requests while campaigning. The client must retry.
+            // 竞选期间中止客户端请求。客户端必须重试。
             Message::ClientRequest { id, request: _ } => {
                 self.send(msg.from, Message::ClientResponse { id, response: Err(Error::Abort) })?;
             }
 
-            // We're not a leader in this term, nor are we forwarding requests,
-            // so we shouldn't see these.
+            // 本任期不是领导者，也不转发请求，
+            // 不应收到这些。
             Message::HeartbeatResponse { .. }
             | Message::AppendResponse { .. }
             | Message::ReadResponse { .. }
@@ -634,9 +634,9 @@ impl RawNode<Candidate> {
         Ok(self.into())
     }
 
-    /// Processes a logical clock tick.
+    /// 处理一个逻辑时钟 tick。
     fn tick(mut self) -> Result<Node> {
-        // If noone won this election, start a new one after a while.
+        // 若无人赢得本次选举，稍后开始新选举。
         self.role.election_duration += 1;
         if self.role.election_duration >= self.role.election_timeout {
             self.campaign()?;
@@ -644,13 +644,13 @@ impl RawNode<Candidate> {
         Ok(self.into())
     }
 
-    /// Hold a new election by increasing the term, voting for ourself, and
-    /// soliciting votes from all peers.
+    /// 通过提升任期、投自己、
+    /// 向所有同伴拉票发起新选举。
     fn campaign(&mut self) -> Result<()> {
         let term = self.term() + 1;
         info!("Starting new election for term {term}");
         self.role = Candidate::new(self.random_election_timeout());
-        self.role.votes.insert(self.id); // vote for ourself
+        self.role.votes.insert(self.id); // 投自己
         self.log.set_term_vote(term, Some(self.id))?;
 
         let (last_index, last_term) = self.log.get_last_index();
@@ -658,48 +658,48 @@ impl RawNode<Candidate> {
     }
 }
 
-/// A leader serves client requests and replicates the log to followers.
-/// If the leader loses leadership, all client requests are aborted.
+/// 领导者服务客户端请求并向跟随者复制日志。
+/// 若失去领导权，所有客户端请求被中止。
 pub struct Leader {
-    /// Follower replication progress.
+    /// 跟随者复制进度。
     progress: HashMap<NodeID, Progress>,
-    /// Tracks pending write requests by log index. Added when the write is
-    /// proposed and appended to the leader's log, and removed when the command
-    /// is applied to the state machine, returning the result to the client.
+    /// 按日志索引跟踪待处理写请求。写被
+    /// 提出并追加到领导者日志时加入，命令
+    /// 应用到状态机并向客户端返回结果时移除。
     writes: HashMap<Index, Write>,
-    /// Tracks pending read requests. For linearizability, read requests are
-    /// assigned a sequence number and only executed once a quorum of nodes have
-    /// confirmed that we're still the leader. Otherwise, an old leader could
-    /// serve stale reads if a new leader has been elected elsewhere.
+    /// 跟踪待处理读请求。为保证线性一致性，读请求
+    /// 分配序列号，仅在多数节点确认
+    /// 我们仍是领导者后才执行。否则旧领导者可能
+    /// 在别处已选出新领导者时提供陈旧读。
     reads: VecDeque<Read>,
-    /// The read sequence number used for the last read. Initialized to 0 in
-    /// this term, and incremented for every read command.
+    /// 上次读使用的读序列号。本任期
+    /// 初始化为 0，每个读命令递增。
     read_seq: ReadSequence,
-    /// Number of ticks since last heartbeat.
+    /// 自上次心跳以来的 tick 数。
     since_heartbeat: Ticks,
 }
 
-/// Per-follower replication progress (in this term).
+/// 每个跟随者的复制进度（本任期内）。
 struct Progress {
-    /// The highest index where the follower's log is known to match the leader.
-    /// Initialized to 0, increases monotonically.
+    /// 已知跟随者日志与领导者匹配的最高索引。
+    /// 初始化为 0，单调递增。
     match_index: Index,
-    /// The next index to replicate to the follower. Initialized to
-    /// last_index+1, decreased when probing log mismatches. Always in
-    /// the range [match_index+1, last_index+1].
+    /// 向跟随者复制的下一索引。初始化为
+    /// last_index+1，探测日志不匹配时减小。始终在
+    /// [match_index+1, last_index+1] 内。
     ///
-    /// Entries not yet sent are in the range [next_index, last_index].
-    /// Entries not acknowledged are in the range [match_index+1, next_index).
+    /// 尚未发送的条目在 [next_index, last_index]。
+    /// 尚未确认的条目在 [match_index+1, next_index)。
     next_index: Index,
-    /// The last read sequence number confirmed by this follower. To avoid stale
-    /// reads on leader changes, a read is only served once its sequence number
-    /// is confirmed by a quorum.
+    /// 该跟随者确认的最后读序列号。为避免
+    /// 领导者变更时的陈旧读，读仅在其序列号
+    /// 被多数确认后才服务。
     read_seq: ReadSequence,
 }
 
 impl Progress {
-    /// Attempts to advance a follower's match index, returning true if it did.
-    /// If next_index is below it, it is advanced to the following index.
+    /// 尝试推进跟随者的 match 索引，成功则返回 true。
+    /// 若 next_index 低于它，则推进到下一索引。
     fn advance(&mut self, match_index: Index) -> bool {
         if match_index <= self.match_index {
             return false;
@@ -709,7 +709,7 @@ impl Progress {
         true
     }
 
-    /// Attempts to advance a follower's read_seq, returning true if it did.
+    /// 尝试推进跟随者的 read_seq，成功则返回 true。
     fn advance_read(&mut self, read_seq: ReadSequence) -> bool {
         if read_seq <= self.read_seq {
             return false;
@@ -718,8 +718,8 @@ impl Progress {
         true
     }
 
-    /// Attempts to regress a follower's next index to the given index, returning
-    /// true if it did. Won't regress below match_index + 1.
+    /// 尝试将跟随者的 next 索引回退到给定索引，
+    /// 成功则返回 true。不会回退到 match_index + 1 以下。
     fn regress_next(&mut self, next_index: Index) -> bool {
         if next_index >= self.next_index || self.next_index <= self.match_index + 1 {
             return false;
@@ -729,28 +729,28 @@ impl Progress {
     }
 }
 
-/// A pending client write request.
+/// 待处理的客户端写请求。
 struct Write {
-    /// The node which submitted the write.
+    /// 提交该写的节点。
     from: NodeID,
-    /// The write request ID.
+    /// 写请求 ID。
     id: RequestID,
 }
 
-/// A pending client read request.
+/// 待处理的客户端读请求。
 struct Read {
-    /// The sequence number of this read.
+    /// 本次读的序列号。
     seq: ReadSequence,
-    /// The node which submitted the read.
+    /// 提交该读的节点。
     from: NodeID,
-    /// The read request ID.
+    /// 读请求 ID。
     id: RequestID,
-    /// The read command.
+    /// 读命令。
     command: Vec<u8>,
 }
 
 impl Leader {
-    /// Creates a new leader role.
+    /// 创建新的领导者角色。
     fn new(peers: HashSet<NodeID>, last_index: Index) -> Self {
         let next_index = last_index + 1;
         let progress = peers
@@ -770,15 +770,15 @@ impl Leader {
 impl Role for Leader {}
 
 impl RawNode<Leader> {
-    /// Transitions the leader into a follower. This can only happen if we
-    /// discover a new term, so we become a leaderless follower. Stepping the
-    /// received message may then follow a new leader, if there is one.
+    /// 将领导者转为跟随者。仅在
+    /// 发现新任期时发生，因此成为无领导者跟随者。
+    /// 处理收到的消息后可能跟随新领导者（若有）。
     fn into_follower(mut self, term: Term) -> Result<RawNode<Follower>> {
         assert!(term > self.term(), "leader can only become follower in later term");
         info!("Discovered new term {term}");
 
-        // Abort in-flight requests. The client must retry. Sort the requests
-        // by ID for test determinism.
+        // 中止在途请求。客户端必须重试。按
+        // ID 排序以保证测试确定性。
         for write in std::mem::take(&mut self.role.writes).into_values().sorted_by_key(|w| w.id) {
             let response = Err(Error::Abort);
             self.send(write.from, Message::ClientResponse { id: write.id, response })?;
@@ -793,56 +793,56 @@ impl RawNode<Leader> {
         Ok(self.into_role(Follower::new(None, election_timeout)))
     }
 
-    /// Processes an inbound message.
+    /// 处理入站消息。
     fn step(mut self, msg: Envelope) -> Result<Node> {
-        // Past term: outdated peer, drop the message.
+        // 过去任期：过时同伴，丢弃消息。
         if msg.term < self.term() {
             debug!("Dropping message from past term: {msg:?}");
             return Ok(self.into());
         }
-        // Future term: become leaderless follower and step the message.
+        // 未来任期：成为无领导者跟随者并处理该消息。
         if msg.term > self.term() {
             return self.into_follower(msg.term)?.step(msg);
         }
 
         match msg.message {
-            // A follower received our heartbeat and confirms our leadership.
-            // We may be able to execute new reads, and we may find that the
-            // follower's log is lagging and requires us to catch it up.
+            // 跟随者收到我们的心跳并确认领导权。
+            // 可能可执行新读，也可能发现
+            // 跟随者日志落后需要追赶。
             Message::HeartbeatResponse { match_index, read_seq } => {
                 let (last_index, _) = self.log.get_last_index();
                 assert!(match_index <= last_index, "future match index");
                 assert!(read_seq <= self.role.read_seq, "future read sequence number");
 
-                // If the read sequence number advances, try to execute reads.
+                // 若读序列号推进，尝试执行读。
                 if self.progress(msg.from).advance_read(read_seq) {
                     self.maybe_read()?;
                 }
 
-                // If the follower didn't match our last index, an append to it
-                // must have failed (or it's catching up). Probe it to discover
-                // a matching entry and start replicating. Move next_index back
-                // to last_index since the follower just told us it doesn't have
-                // it (or a previous last_index).
+                // 若跟随者未匹配我们的 last_index，则对其
+                // append 失败（或正在追赶）。探测以找到
+                // 匹配条目并开始复制。将 next_index 回退
+                // 到 last_index，因为跟随者刚告诉我们没有
+                // 它（或此前的 last_index）。
                 if match_index == 0 {
                     self.progress(msg.from).regress_next(last_index);
                     self.maybe_send_append(msg.from, true)?;
                 }
 
-                // If the follower's match index advances, an append response
-                // got lost. Try to commit and apply.
+                // 若跟随者 match 索引推进，说明某次 append 响应
+                // 丢失。尝试提交并应用。
                 //
-                // We don't need to eagerly send any pending entries, since any
-                // proposals made after this heartbeat was sent should have been
-                // eagerly replicated in steady state. If not, the next
-                // heartbeat will trigger a probe above.
+                // 不必急切发送待发条目：此心跳之后的
+                // 提案在稳态下应已急切复制。
+                // 否则下次
+                // 心跳会触发上面的探测。
                 if self.progress(msg.from).advance(match_index) {
                     self.maybe_commit_and_apply()?;
                 }
             }
 
-            // A follower appended our log entries (or a probe found a match).
-            // Record its progress and attempt to commit and apply.
+            // 跟随者追加了我们的日志（或探测找到匹配）。
+            // 记录进度并尝试提交应用。
             Message::AppendResponse { match_index, reject_index: 0 } if match_index > 0 => {
                 let (last_index, _) = self.log.get_last_index();
                 assert!(match_index <= last_index, "future match index");
@@ -851,50 +851,50 @@ impl RawNode<Leader> {
                     self.maybe_commit_and_apply()?;
                 }
 
-                // Eagerly send any further pending entries. This may be a
-                // successful probe response, or the peer may be lagging and
-                // we're catching it up one MAX_APPEND_ENTRIES batch at a time.
+                // 急切发送后续待发条目。可能是
+                // 成功的探测响应，或同伴落后，
+                // 我们每次以 MAX_APPEND_ENTRIES 一批追赶。
                 self.maybe_send_append(msg.from, false)?;
             }
 
-            // A follower confirmed our read sequence number. If it advances,
-            // try to execute reads.
+            // 跟随者确认了我们的读序列号。若推进，
+            // 则尝试执行读。
             Message::ReadResponse { seq } => {
                 if self.progress(msg.from).advance_read(seq) {
                     self.maybe_read()?;
                 }
             }
 
-            // A follower rejected an append because the base entry in
-            // reject_index did not match its log. Probe the previous entry by
-            // sending an empty append until we find a common base.
+            // 跟随者拒绝 append，因
+            // reject_index 处 base 条目不匹配其日志。通过
+            // 发送空 append 探测前一条，直到找到公共 base。
             //
-            // This linear probing can be slow with long divergent logs, but we
-            // keep it simple. See also section 5.3 in the Raft paper.
+            // 对长分叉日志线性探测可能较慢，但为
+            // 简单起见如此。见论文 5.3 节。
             Message::AppendResponse { reject_index, match_index: 0 } if reject_index > 0 => {
                 let (last_index, _) = self.log.get_last_index();
                 assert!(reject_index <= last_index, "future reject index");
 
-                // If the rejected base index is at or below the match index,
-                // the rejection is stale and can be ignored.
+                // 若被拒 base 索引不高于 match 索引，
+                // 则拒绝已过时，可忽略。
                 if reject_index <= self.progress(msg.from).match_index {
                     return Ok(self.into());
                 }
 
-                // Probe below the reject index, if we haven't already moved
-                // next_index below it. This avoids sending duplicate probes
-                // (heartbeats will trigger retries if they're lost).
+                // 若 next_index 尚未低于 reject 索引，
+                // 则在其下探测。避免重复探测
+                // （丢失时心跳会触发重试）。
                 if self.progress(msg.from).regress_next(reject_index) {
                     self.maybe_send_append(msg.from, true)?;
                 }
             }
 
-            // AppendResponses must set either match_index or reject_index.
+            // AppendResponse 必须设置 match_index 或 reject_index 之一。
             Message::AppendResponse { .. } => panic!("invalid message {msg:?}"),
 
-            // A client submitted a write request. Propose it, and wait until
-            // it's replicated and applied to the state machine before returning
-            // the response to the client.
+            // 客户端提交写请求。提出它，待
+            // 复制并应用到状态机后再
+            // 返回响应给客户端。
             Message::ClientRequest { id, request: Request::Write(command) } => {
                 let index = self.propose(Some(command))?;
                 self.role.writes.insert(index, Write { from: msg.from, id });
@@ -903,9 +903,9 @@ impl RawNode<Leader> {
                 }
             }
 
-            // A client submitted a read request. To ensure linearizability, we
-            // must confirm that we are still the leader by sending the read's
-            // sequence number and wait for quorum confirmation.
+            // 客户端提交读请求。为保证线性一致性，
+            // 须发送读序列号并等待多数确认
+            // 我们仍是领导者。
             Message::ClientRequest { id, request: Request::Read(command) } => {
                 self.role.read_seq += 1;
                 let read = Read { seq: self.role.read_seq, from: msg.from, id, command };
@@ -916,35 +916,35 @@ impl RawNode<Leader> {
                 }
             }
 
-            // A client submitted a status command.
+            // 客户端提交状态查询。
             Message::ClientRequest { id, request: Request::Status } => {
                 let response = self.status().map(Response::Status);
                 self.send(msg.from, Message::ClientResponse { id, response })?;
             }
 
-            // Don't grant any votes (we've already voted for ourself).
+            // 不授予任何选票（已投给自己）。
             Message::Campaign { .. } => {
                 self.send(msg.from, Message::CampaignResponse { vote: false })?
             }
 
-            // Votes can come in after we won the election, ignore them.
+            // 当选后仍可能收到选票，忽略。
             Message::CampaignResponse { .. } => {}
 
-            // There can't be another leader in this term.
+            // 本任期不能有另一领导者。
             Message::Heartbeat { .. } | Message::Append { .. } | Message::Read { .. } => {
                 panic!("saw other leader {} in term {}", msg.from, msg.term);
             }
 
-            // Leaders don't proxy client requests.
+            // 领导者不代理客户端请求。
             Message::ClientResponse { .. } => panic!("unexpected message {msg:?}"),
         }
 
         Ok(self.into())
     }
 
-    /// Processes a logical clock tick.
+    /// 处理一个逻辑时钟 tick。
     fn tick(mut self) -> Result<Node> {
-        // Send periodic heartbeats.
+        // 发送周期性心跳。
         self.role.since_heartbeat += 1;
         if self.role.since_heartbeat >= self.opts.heartbeat_interval {
             self.heartbeat()?;
@@ -952,7 +952,7 @@ impl RawNode<Leader> {
         Ok(self.into())
     }
 
-    /// Broadcasts a heartbeat to all peers.
+    /// 向所有同伴广播心跳。
     fn heartbeat(&mut self) -> Result<()> {
         let (last_index, last_term) = self.log.get_last_index();
         let (commit_index, _) = self.log.get_commit_index();
@@ -963,15 +963,15 @@ impl RawNode<Leader> {
         self.broadcast(Message::Heartbeat { last_index, commit_index, read_seq })
     }
 
-    /// Proposes a command for consensus by appending it to our log and
-    /// replicating it to peers. If successful, it will eventually be committed
-    /// and applied to the state machine.
+    /// 通过追加到本地日志并
+    /// 复制给同伴，提出命令以求共识。成功后最终会
+    /// 提交并应用到状态机。
     fn propose(&mut self, command: Option<Vec<u8>>) -> Result<Index> {
         let index = self.log.append(command)?;
         for peer in self.peers.iter().copied().sorted() {
-            // Eagerly send the entry to the peer if it's in steady state and
-            // we've sent all previous entries. Otherwise, the peer is lagging
-            // and we're probing past entries for a match.
+            // 若同伴处于稳态且
+            // 此前条目已发送，则急切发送该条目。否则同伴落后，
+            // 我们在探测过去条目以寻找匹配。
             if index == self.progress(peer).next_index {
                 self.maybe_send_append(peer, false)?;
             }
@@ -979,35 +979,35 @@ impl RawNode<Leader> {
         Ok(index)
     }
 
-    /// Commits new entries that have been replicated to a quorum and applies
-    /// them to the state machine, returning results to clients.
+    /// 提交已复制到法定人数的新条目，并
+    /// 应用到状态机，向客户端返回结果。
     fn maybe_commit_and_apply(&mut self) -> Result<Index> {
-        // Determine the new commit index by quorum.
+        // 按法定人数确定新的 commit 索引。
         let (last_index, _) = self.log.get_last_index();
         let commit_index = self.quorum_value(
             self.role.progress.values().map(|p| p.match_index).chain([last_index]).collect(),
         );
 
-        // If the commit index doesn't advance, do nothing. We don't assert on
-        // this, since the quorum value may regress e.g. following a restart or
-        // leader change where followers are initialized with match index 0.
+        // 若 commit 索引未推进则不做。不断言，
+        // 因为法定人数值可能回退，例如重启或
+        // 领导者变更后跟随者 match 索引初始化为 0。
         let (old_index, old_term) = self.log.get_commit_index();
         if commit_index <= old_index {
             return Ok(old_index);
         }
 
-        // We can only safely commit an entry from our own term (see section
-        // 5.4.2 in Raft paper).
+        // 只能安全提交本任期的条目（见
+        // 论文 5.4.2 节）。
         match self.log.get(commit_index)? {
             Some(entry) if entry.term == self.term() => {}
             Some(_) => return Ok(old_index),
             None => panic!("commit index {commit_index} missing"),
         }
 
-        // Commit entries.
+        // 提交条目。
         self.log.commit(commit_index)?;
 
-        // Apply entries and respond to clients.
+        // 应用条目并响应客户端。
         let term = self.term();
         let mut iter = self.log.scan_apply(self.state.get_applied_index());
         while let Some(entry) = iter.next().transpose()? {
@@ -1022,8 +1022,8 @@ impl RawNode<Leader> {
         }
         drop(iter);
 
-        // If the commit term changed, there may be pending reads waiting for us
-        // to commit and apply an entry from our own term. Execute them.
+        // 若 commit 任期变化，可能有读在等待我们
+        // 提交并应用本任期条目。执行它们。
         if old_term != self.term() {
             self.maybe_read()?;
         }
@@ -1031,29 +1031,29 @@ impl RawNode<Leader> {
         Ok(commit_index)
     }
 
-    /// Executes any ready read requests, where a quorum have confirmed that
-    /// we're still the leader for the read sequences.
+    /// 执行已就绪的读请求（多数已确认
+    /// 我们在这些读序列上仍是领导者）。
     fn maybe_read(&mut self) -> Result<()> {
         if self.role.reads.is_empty() {
             return Ok(());
         }
 
-        // It's only safe to read if we've committed and applied an entry from
-        // our own term (the leader appends an entry when elected). Otherwise we
-        // may be behind on application and serve stale reads.
+        // 仅当已提交并应用本任期
+        // 条目时读才安全（领导者当选时会追加一条）。否则
+        // 应用可能落后，会提供陈旧读。
         let (commit_index, commit_term) = self.log.get_commit_index();
         let applied_index = self.state.get_applied_index();
         if commit_term < self.term() || applied_index < commit_index {
             return Ok(());
         }
 
-        // Determine the maximum read sequence confirmed by quorum.
+        // 确定多数确认的最大读序列号。
         let quorum_read_seq = self.quorum_value(
             self.role.progress.values().map(|p| p.read_seq).chain([self.role.read_seq]).collect(),
         );
 
-        // Execute ready reads. The VecDeque is ordered by read_seq, so we
-        // can keep pulling until we hit quorum_read_seq.
+        // 执行就绪读。VecDeque 按 read_seq 有序，
+        // 可一直取到 quorum_read_seq。
         while let Some(read) = self.role.reads.front() {
             if read.seq > quorum_read_seq {
                 break;
@@ -1065,19 +1065,19 @@ impl RawNode<Leader> {
         Ok(())
     }
 
-    /// Sends a batch of pending log entries to a follower, in the
-    /// [next_index,last_index] range. Limited by max_append_entries.
+    /// 向跟随者发送一批待发日志，范围
+    /// [next_index, last_index]，受 max_append_entries 限制。
     ///
-    /// If probe is true, we're trying to find a log index on the follower where
-    /// it matches our log. To do this, we send an empty append probe with
-    /// base_index of next_index-1. If the follower confirms the base_index
-    /// matches its log, the actual entries are sent next -- otherwise,
-    /// next_index is decremented and another probe is sent until a match is
-    /// found. See section 5.3 in the Raft paper.
+    /// 若 probe 为 true，则在寻找跟随者日志与我们匹配的
+    /// 索引。发送 base_index 为 next_index-1 的
+    /// 空 append 探测。若跟随者确认 base_index
+    /// 匹配其日志，下次发送实际条目；否则
+    /// 递减 next_index 再探测，直到找到匹配。
+    /// 见论文 5.3 节。
     ///
-    /// The probe is skipped if the follower is up-to-date (according to
-    /// match_index and last_index). If the probe's base_index has already been
-    /// confirmed via match_index, an actual append is sent instead.
+    /// 若跟随者已追上（按
+    /// match_index 与 last_index），则跳过探测。若探测的 base_index 已由
+    /// match_index 确认，则改为发送实际 append。
     fn maybe_send_append(&mut self, peer: NodeID, mut probe: bool) -> Result<()> {
         let (last_index, _) = self.log.get_last_index();
         let progress = self.role.progress.get_mut(&peer).expect("unknown node");
@@ -1086,26 +1086,26 @@ impl RawNode<Leader> {
         assert!(progress.match_index <= last_index, "invalid match_index > last_index");
         assert!(progress.next_index <= last_index + 1, "invalid next_index > last_index + 1");
 
-        // If the peer is caught up, there's no point sending an append.
+        // 若同伴已追上，不必发送 append。
         if progress.match_index == last_index {
             return Ok(());
         }
 
-        // If a probe was requested, but the base_index has already been
-        // confirmed via match_index, there is no point in probing. Just send
-        // the entries instead.
+        // 若请求探测，但 base_index 已由
+        // match_index 确认，则不必探测，直接
+        // 发送条目。
         probe = probe && progress.next_index > progress.match_index + 1;
 
-        // If there are no pending entries, and this is not a probe, there's
-        // nothing more to send until we get a response from the follower.
+        // 若无待发条目且非探测，则在
+        // 收到跟随者响应前无更多可发。
         if progress.next_index > last_index && !probe {
             return Ok(());
         }
 
-        // Fetch the base and entries.
+        // 获取 base 与条目。
         let (base_index, base_term) = match progress.next_index {
             0 => panic!("next_index=0 for node {peer}"),
-            1 => (0, 0), // first entry, there is no base
+            1 => (0, 0), // 第一条，无 base
             next => self.log.get(next - 1)?.map(|e| (e.index, e.term)).expect("missing base entry"),
         };
         let entries = match probe {
@@ -1117,8 +1117,8 @@ impl RawNode<Leader> {
             true => Vec::new(),
         };
 
-        // Optimistically assume the entries will be accepted by the follower,
-        // and bump next_index to avoid resending them until a response.
+        // 乐观假设跟随者会接受这些条目，
+        // 提升 next_index 以免在响应前重发。
         if let Some(last) = entries.last() {
             progress.next_index = last.index + 1;
         }
@@ -1127,7 +1127,7 @@ impl RawNode<Leader> {
         self.send(peer, Message::Append { base_index, base_term, entries })
     }
 
-    /// Generates cluster status.
+    /// 生成集群状态。
     fn status(&mut self) -> Result<Status> {
         Ok(Status {
             leader: self.id,
@@ -1145,7 +1145,7 @@ impl RawNode<Leader> {
         })
     }
 
-    /// Returns a mutable borrow of a node's progress. Convenience method.
+    /// 返回节点进度的可变借用。便捷方法。
     fn progress(&mut self, id: NodeID) -> &mut Progress {
         self.role.progress.get_mut(&id).expect("unknown node")
     }

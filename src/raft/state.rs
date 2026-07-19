@@ -1,51 +1,38 @@
 use super::{Entry, Index};
 use crate::error::Result;
 
-/// A Raft-managed state machine. Raft itself does not care what the state
-/// machine is, nor what the commands and results do -- it will simply apply
-/// arbitrary binary commands sequentially from the Raft log, returning an
-/// arbitrary binary result to the client.
+/// 由 Raft 管理的状态机。Raft 本身不关心状态机是什么、命令与结果做什么——
+/// 它只是按顺序从 Raft 日志中应用任意二进制命令，并把任意二进制结果返回给客户端。
 ///
-/// Since commands are applied identically across all nodes, they must be
-/// deterministic and yield the same state and result across all nodes too.
-/// Otherwise, the nodes will diverge, such that different nodes will produce
-/// different results.
+/// 由于命令会在所有节点上以相同方式应用，它们必须是确定性的，并在所有节点上
+/// 产生相同的状态与结果。否则节点会分叉，不同节点返回不同结果。
 ///
-/// Write commands (`Request::Write`) are replicated and applied on all nodes
-/// via `State::apply`. The state machine must keep track of the last applied
-/// index and return it via `State::get_applied_index`. Read commands
-/// (`Request::Read`) are only executed on a single node via `State::read` and
-/// must not make any state changes.
+/// 写命令（`Request::Write`）会通过 `State::apply` 在所有节点上复制并应用。
+/// 状态机必须跟踪最后已应用的索引，并通过 `State::get_applied_index` 返回。
+/// 读命令（`Request::Read`）只在单个节点上通过 `State::read` 执行，且不得修改状态。
 pub trait State: Send {
-    /// Returns the last applied log index from the state machine.
+    /// 返回状态机中最后已应用的日志索引。
     ///
-    /// This must correspond to the current state of the state machine, since it
-    /// determines which command to apply next. In particular, a node crash may
-    /// result in partial command application or data loss, which must be
-    /// handled appropriately.
+    /// 该值必须与状态机当前状态一致，因为它决定下一条要应用的命令。
+    /// 特别是节点崩溃可能导致命令部分应用或数据丢失，需要妥善处理。
     fn get_applied_index(&self) -> Index;
 
-    /// Applies a log entry to the state machine, returning a client result.
-    /// Errors are considered applied and propagated back to the client.
+    /// 将一条日志条目应用到状态机，并返回客户端结果。
+    /// 错误视为已应用，并传播回客户端。
     ///
-    /// This is executed on all nodes, so the result must be deterministic: it
-    /// must yield the same state and result on all nodes, even if the command
-    /// is reapplied following a node crash.
+    /// 该方法在所有节点上执行，因此结果必须确定：即使节点崩溃后命令被重新应用，
+    /// 也必须在所有节点上得到相同状态与结果。
     ///
-    /// Any non-deterministic apply error (e.g. an IO error) must panic and
-    /// crash the node -- if it instead returns an error to the client, the
-    /// command is considered applied and node states will diverge. The state
-    /// machine is responsible for panicing when appropriate.
+    /// 任何非确定性的 apply 错误（例如 IO 错误）必须 panic 并让节点崩溃——
+    /// 若只是把错误返回给客户端，命令会被视为已应用，节点状态将分叉。
+    /// 状态机负责在适当时机 panic。
     ///
-    /// The entry may contain a noop command, which is committed by Raft during
-    /// leader changes. This still needs to be applied to the state machine to
-    /// properly update the applied index, and should return an empty result.
+    /// 条目可能包含 noop 命令（领导者变更时由 Raft 提交）。
+    /// 仍需应用到状态机以正确更新 applied 索引，并应返回空结果。
     fn apply(&mut self, entry: Entry) -> Result<Vec<u8>>;
 
-    /// Executes a read command in the state machine, returning a client result.
-    /// Errors are also propagated back to the client.
+    /// 在状态机中执行读命令，并返回客户端结果。错误同样传播回客户端。
     ///
-    /// This is only executed on a single node, so it must not result in any
-    /// state changes (i.e. it must not write).
+    /// 该方法只在单个节点上执行，因此不得产生任何状态变更（不得写入）。
     fn read(&self, command: Vec<u8>) -> Result<Vec<u8>>;
 }

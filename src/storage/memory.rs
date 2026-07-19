@@ -5,13 +5,12 @@ use std::ops::{Bound, RangeBounds};
 use super::{Engine, Status};
 use crate::error::Result;
 
-/// An in-memory key-value storage engine using the Rust standard library's
-/// B-tree implementation. Data is not persisted. Primarily for testing.
+/// 基于标准库 B 树的内存键值存储引擎。数据不持久化，主要用于测试与演示。
 #[derive(Default)]
 pub struct Memory(BTreeMap<Vec<u8>, Vec<u8>>);
 
 impl Memory {
-    /// Creates a new Memory key-value storage engine.
+    /// 创建一个新的内存键值存储引擎。
     pub fn new() -> Self {
         Self::default()
     }

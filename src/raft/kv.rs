@@ -1,7 +1,6 @@
-//! A simple string key/value state machine for demos and tests.
+//! 用于演示与测试的简单字符串键值状态机。
 //!
-//! Commands and responses are bincode-encoded `Vec<u8>`, matching the
-//! opaque byte interface of [`super::State`].
+//! 命令与响应均为 bincode 编码的 `Vec<u8>`，与 [`super::State`] 的不透明字节接口一致。
 
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -12,7 +11,7 @@ use super::{Entry, Index, State};
 use crate::encoding::{self, Value as _};
 use crate::error::Result;
 
-/// In-memory string key/value store driven by Raft.
+/// 由 Raft 驱动的内存字符串键值存储。
 #[derive(Default)]
 pub struct Kv {
     applied_index: Index,
@@ -20,12 +19,12 @@ pub struct Kv {
 }
 
 impl Kv {
-    /// Creates an empty key/value state machine.
+    /// 创建一个空的键值状态机。
     pub fn new() -> Box<Self> {
         Box::new(Self::default())
     }
 
-    /// Returns a snapshot of the current data (for inspection / tests).
+    /// 返回当前数据的快照（便于检查 / 测试）。
     pub fn data(&self) -> &BTreeMap<String, String> {
         &self.data
     }
@@ -61,15 +60,15 @@ impl State for Kv {
     }
 }
 
-/// A key/value command. Encode with [`encoding::Value::encode`] before
-/// wrapping in [`super::Request::Read`] / [`super::Request::Write`].
+/// 键值命令。先用 [`encoding::Value::encode`] 编码，
+/// 再包装进 [`super::Request::Read`] / [`super::Request::Write`]。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Command {
-    /// Fetch the value of the given key.
+    /// 获取给定键的值。
     Get { key: String },
-    /// Store a key/value pair (write; returns the applied index).
+    /// 存储键值对（写操作；返回已应用索引）。
     Put { key: String, value: String },
-    /// Return all key/value pairs.
+    /// 返回全部键值对。
     Scan,
 }
 
@@ -85,14 +84,14 @@ impl Display for Command {
     }
 }
 
-/// A [`Command`] response.
+/// [`Command`] 的响应。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Response {
-    /// Result of Get.
+    /// Get 的结果。
     Get(Option<String>),
-    /// Applied index of a Put.
+    /// Put 的已应用索引。
     Put(Index),
-    /// All pairs from Scan.
+    /// Scan 返回的全部键值对。
     Scan(BTreeMap<String, String>),
 }
 

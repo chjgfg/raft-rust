@@ -1,4 +1,4 @@
-//! Single-node Raft smoke tests using Memory storage.
+//! 使用 Memory 存储的单节点 Raft 冒烟测试。
 
 use std::collections::HashSet;
 
@@ -13,12 +13,12 @@ use uuid::Uuid;
 fn make_node() -> Result<(Node, channel::Receiver<Envelope>)> {
     let (tx, rx) = channel::unbounded();
     let log = Log::new(Box::new(Memory::new()))?;
-    // Single-node cluster (no peers) becomes leader immediately.
+    // 单节点集群（无同伴）创建时立即成为领导者。
     let node = Node::new(1, HashSet::new(), log, Kv::new(), tx, Options::default())?;
     Ok((node, rx))
 }
 
-/// Drain outbound messages and return the ClientResponse for `want_id`.
+/// 排空出站消息，并返回 `want_id` 对应的 ClientResponse。
 fn take_response(rx: &channel::Receiver<Envelope>, want_id: Uuid) -> Result<Response> {
     while let Ok(msg) = rx.try_recv() {
         if let Message::ClientResponse { id, response } = msg.message
@@ -36,7 +36,7 @@ fn single_node_becomes_leader_and_serves_kv() -> Result<()> {
     assert_eq!(node.id(), 1);
     assert!(matches!(node, Node::Leader(_)));
 
-    // Put — single-node commits and applies immediately.
+    // Put —— 单节点立即提交并应用。
     let put_id = Uuid::new_v4();
     let put_cmd = kv::Command::Put { key: "hello".into(), value: "world".into() };
     let term = node.term();
@@ -56,7 +56,7 @@ fn single_node_becomes_leader_and_serves_kv() -> Result<()> {
         other => panic!("expected Write, got {other:?}"),
     }
 
-    // Get — single-node quorum-confirms reads immediately.
+    // Get —— 单节点立即以法定人数确认读。
     let get_id = Uuid::new_v4();
     let get_cmd = kv::Command::Get { key: "hello".into() };
     let term = node.term();
@@ -76,7 +76,7 @@ fn single_node_becomes_leader_and_serves_kv() -> Result<()> {
         other => panic!("expected Read, got {other:?}"),
     }
 
-    // Status
+    // 状态查询
     let status_id = Uuid::new_v4();
     let term = node.term();
     node = node.step(Envelope {

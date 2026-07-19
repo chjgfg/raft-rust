@@ -7,44 +7,40 @@ use crate::encoding::{self, Key as _, Value as _, bincode};
 use crate::error::Result;
 use crate::storage;
 
-/// A log index (entry position). Starts at 1. 0 indicates no index.
+/// 日志索引（条目位置）。从 1 开始；0 表示无索引。
 pub type Index = u64;
 
-/// A log entry containing a state machine command.
+/// 包含状态机命令的日志条目。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
-    /// The entry index.
+    /// 条目索引。
     ///
-    /// We could omit the index in the encoded value, since it's also stored in
-    /// the key, but we keep it simple.
+    /// 编码值里其实可以省略索引（键里也有），但为简单起见仍保留。
     pub index: Index,
-    /// The term in which the entry was added.
+    /// 条目被加入时的任期。
     pub term: Term,
-    /// The state machine command. None (noop) commands are used during leader
-    /// election to commit old entries, see section 5.4.2 in the Raft paper.
+    /// 状态机命令。None（noop）用于领导者选举时提交旧条目，见 Raft 论文 5.4.2 节。
     pub command: Option<Vec<u8>>,
 }
 
 impl encoding::Value for Entry {}
 
-/// A log storage key.
+/// 日志存储键。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Key {
-    /// A log entry, storing the term and command.
+    /// 日志条目，保存任期与命令。
     Entry(Index),
-    /// Stores the current term and vote (if any).
+    /// 保存当前任期与投票（若有）。
     TermVote,
-    /// Stores the current commit index (if any).
+    /// 保存当前 commit 索引（若有）。
     CommitIndex,
 }
 
 impl encoding::Key<'_> for Key {}
 
-/// The Raft log stores a sequence of arbitrary commands (typically writes) that
-/// are replicated across nodes and applied sequentially to the local state
-/// machine. Each entry contains an index, command, and the term in which the
-/// leader proposed it. Commands may be noops (None), which are added when a
-/// leader is elected (see section 5.4.2 in the Raft paper). For example:
+/// Raft 日志保存一系列任意命令（通常是写操作），在节点间复制，并顺序应用到本地状态机。
+/// 每条日志含索引、命令，以及领导者提出它时的任期。命令可为 noop（None），
+/// 在选出领导者时追加（见论文 5.4.2 节）。示例：
 ///
 /// Index | Term | Command
 /// ------|------|------------------------------------------------------
@@ -55,70 +51,56 @@ impl encoding::Key<'_> for Key {}
 ///   5   |   2  | UPDATE table SET value = 'bar' WHERE id = 1
 ///   6   |   2  | DELETE FROM table WHERE id = 1
 ///
-/// Note that this is for illustration only, and the actual toyDB Raft commands
-/// are not SQL statements but lower-level write operations.
+/// 注意这只是示意；实际命令不必是 SQL，而是任意底层写操作。
 ///
-/// A key/value store is used to store the log entries on disk, keyed by index,
-/// along with a few other metadata keys (e.g. who we voted for in this term).
+/// 使用键值存储按索引落盘日志条目，以及若干元数据键（例如本任期投票给了谁）。
 ///
-/// In the steady state, the log is append-only: when a client submits a
-/// command, the leader appends it to its own log (via [`Log::append`]) and
-/// replicates it to followers who append it to their logs (via
-/// [`Log::splice`]). When an index has been replicated to a majority of nodes
-/// it becomes committed, making the log immutable up to that index and
-/// guaranteeing that all nodes will eventually contain it. Nodes keep track of
-/// the commit index via [`Log::commit`] and apply committed commands to the
-/// state machine.
+/// 稳态下日志只追加：客户端提交命令后，领导者经 [`Log::append`] 写入本地日志，
+/// 再复制给跟随者，跟随者经 [`Log::splice`] 追加。当某索引已复制到多数节点时
+/// 即变为已提交，此前日志不可变，并保证最终所有节点都会拥有它。
+/// 节点通过 [`Log::commit`] 跟踪 commit 索引，并将已提交命令应用到状态机。
 ///
-/// However, uncommitted entries can be replaced or removed. A leader may append
-/// entries to its log, but then be unable to reach consensus on them (e.g.
-/// because it is unable to communicate with a majority of nodes). If a
-/// different leader is elected and writes different commands to those same
-/// indexes, then the uncommitted entries will be replaced with entries from the
-/// new leader once the old leader (or a follower) discovers it.
+/// 但未提交条目可被替换或删除。领导者可能已追加却无法达成共识
+///（例如无法与多数节点通信）。若另选新领导者并在相同索引写入不同命令，
+/// 旧领导者或跟随者发现后，会用新领导者的条目替换未提交部分。
 ///
-/// The Raft log has the following invariants:
+/// Raft 日志不变量：
 ///
-/// * Entry indexes are contiguous starting at 1 (no index gaps).
-/// * Entry terms never decrease from the previous entry.
-/// * Entry terms are at or below the current term.
-/// * Appended entries are durable (flushed to disk).
-/// * Appended entries use the current term.
-/// * Committed entries are never changed or removed (no log truncation).
-/// * Committed entries will eventually be replicated to all nodes.
-/// * Entries with the same index/term contain the same command.
-/// * If two logs contain a matching index/term, all previous entries
-///   are identical (see section 5.3 in the Raft paper).
+/// * 条目索引从 1 起连续（无空洞）。
+/// * 条目任期相对前一条从不下降。
+/// * 条目任期不超过当前任期。
+/// * 追加的条目是持久的（刷盘）。
+/// * 追加的条目使用当前任期。
+/// * 已提交条目永不更改或删除（无日志截断）。
+/// * 已提交条目最终会复制到所有节点。
+/// * 相同索引/任期的条目含相同命令。
+/// * 若两份日志在某索引/任期匹配，则此前所有条目相同（见论文 5.3 节）。
 pub struct Log {
-    /// The underlying storage engine. Uses a trait object instead of generics,
-    /// to allow runtime selection of the engine and avoid propagating the
-    /// generic type parameters throughout Raft.
+    /// 底层存储引擎。使用 trait 对象而非泛型，以便运行时选择引擎，
+    /// 并避免把泛型参数传遍整个 Raft。
     pub engine: Box<dyn storage::Engine>,
-    /// The current term.
+    /// 当前任期。
     term: Term,
-    /// Our leader vote in the current term, if any.
+    /// 本任期的领导者投票（若有）。
     vote: Option<NodeID>,
-    /// The index of the last stored entry.
+    /// 最后一条已存条目的索引。
     last_index: Index,
-    /// The term of the last stored entry.
+    /// 最后一条已存条目的任期。
     last_term: Term,
-    /// The index of the last committed entry.
+    /// 最后一条已提交条目的索引。
     commit_index: Index,
-    /// The term of the last committed entry.
+    /// 最后一条已提交条目的任期。
     commit_term: Term,
-    /// If true, fsync entries to disk when appended. This is mandated by Raft,
-    /// but comes with a hefty performance penalty (especially since we don't
-    /// optimize for it by batching entries before fsyncing). Disabling it will
-    /// yield much better write performance, but may lose data on crashes, which
-    /// in some scenarios can cause log entries to become "uncommitted" and
-    /// state machines diverging.
+    /// 为 true 时，追加后 fsync 到磁盘。这是 Raft 要求的，但有明显性能代价
+    ///（尤其是未做批量 fsync 优化时）。关闭可大幅提升写性能，但崩溃可能丢数据，
+    /// 某些场景下会导致日志“未提交”与状态机分叉。
     fsync: bool,
 }
 
 impl Log {
-    /// Initializes a log using the given storage engine.
+    /// 使用给定存储引擎初始化日志。
     pub fn new(mut engine: Box<dyn storage::Engine>) -> Result<Self> {
-        // Load some initial in-memory state from disk.
+        // 从磁盘加载初始内存状态。
         let (term, vote) = engine
             .get(&Key::TermVote.encode())?
             .map(|v| bincode::deserialize(&v))
@@ -141,34 +123,32 @@ impl Log {
             .transpose()?
             .unwrap_or((0, 0));
 
-        let fsync = true; // fsync by default
+        let fsync = true; // 默认开启 fsync
         Ok(Self { engine, term, vote, last_index, last_term, commit_index, commit_term, fsync })
     }
 
-    /// Controls whether to fsync writes. Disabling this may violate Raft
-    /// guarantees, see comment on fsync attribute.
+    /// 控制是否对写入做 fsync。关闭可能违反 Raft 保证，见 fsync 字段注释。
     pub fn enable_fsync(&mut self, fsync: bool) {
         self.fsync = fsync
     }
 
-    /// Returns the commit index and term.
+    /// 返回 commit 索引与任期。
     pub fn get_commit_index(&self) -> (Index, Term) {
         (self.commit_index, self.commit_term)
     }
 
-    /// Returns the last log index and term.
+    /// 返回最后一条日志的索引与任期。
     pub fn get_last_index(&self) -> (Index, Term) {
         (self.last_index, self.last_term)
     }
 
-    /// Returns the current term (0 if none) and vote.
+    /// 返回当前任期（无则为 0）与投票。
     pub fn get_term_vote(&self) -> (Term, Option<NodeID>) {
         (self.term, self.vote)
     }
 
-    /// Stores the current term and cast vote (if any). Enforces that the term
-    /// does not regress, and that we only vote for one node in a term. append()
-    /// will use this term, and splice() can't write entries beyond it.
+    /// 保存当前任期与投票（若有）。强制任期不回退，且一个任期内只投一票。
+    /// append() 使用此任期；splice() 不能写入超过该任期的条目。
     pub fn set_term_vote(&mut self, term: Term, vote: Option<NodeID>) -> Result<()> {
         assert!(term > 0, "can't set term 0");
         assert!(term >= self.term, "term regression {} → {}", self.term, term);
@@ -178,18 +158,16 @@ impl Log {
             return Ok(());
         }
         self.engine.set(&Key::TermVote.encode(), bincode::serialize(&(term, vote)))?;
-        // Always fsync, even with Log::fsync = false. Term changes are rare, so
-        // this doesn't materially affect performance, and double voting could
-        // lead to multiple leaders and split brain which is really bad.
+        // 即使 Log::fsync = false 也总是 fsync。任期变更很少，对性能影响不大，
+        // 而双重投票可能导致多领导者与脑裂，后果严重。
         self.engine.flush()?;
         self.term = term;
         self.vote = vote;
         Ok(())
     }
 
-    /// Appends a command to the log at the current term, and flushes it to
-    /// disk, returning its index. None implies a noop command, typically after
-    /// Raft leader changes.
+    /// 在当前任期向日志追加命令并刷盘，返回其索引。
+    /// None 表示 noop 命令，通常在 Raft 领导者变更后使用。
     pub fn append(&mut self, command: Option<Vec<u8>>) -> Result<Index> {
         assert!(self.term > 0, "can't append entry in term 0");
         let entry = Entry { index: self.last_index + 1, term: self.term, command };
@@ -202,8 +180,7 @@ impl Log {
         Ok(entry.index)
     }
 
-    /// Commits entries up to and including the given index. The index must
-    /// exist and be at or after the current commit index.
+    /// 提交到给定索引（含）。该索引必须存在且不早于当前 commit 索引。
     pub fn commit(&mut self, index: Index) -> Result<Index> {
         let term = match self.get(index)? {
             Some(entry) if entry.index < self.commit_index => {
@@ -214,22 +191,20 @@ impl Log {
             None => panic!("commit index {index} does not exist"),
         };
         self.engine.set(&Key::CommitIndex.encode(), bincode::serialize(&(index, term)))?;
-        // NB: the commit index doesn't need to be fsynced, since the entries
-        // are fsynced and the commit index can be recovered from the quorum.
+        // 注意：commit 索引不必 fsync，因为条目已 fsync，且可从多数派日志恢复。
         self.commit_index = index;
         self.commit_term = term;
         Ok(index)
     }
 
-    /// Fetches an entry at an index, or None if it does not exist.
+    /// 获取指定索引的条目；不存在则返回 None。
     pub fn get(&mut self, index: Index) -> Result<Option<Entry>> {
         self.engine.get(&Key::Entry(index).encode())?.map(|v| Entry::decode(&v)).transpose()
     }
 
-    /// Checks if the log contains an entry with the given index and term.
+    /// 检查日志是否包含给定索引与任期的条目。
     pub fn has(&mut self, index: Index, term: Term) -> Result<bool> {
-        // Fast path: check against last_index. This is the common case when
-        // followers process appends or heartbeats.
+        // 快路径：与 last_index 比较。跟随者处理 append/心跳时的常见情况。
         if index == 0 || index > self.last_index {
             return Ok(false);
         }
@@ -239,7 +214,7 @@ impl Log {
         Ok(self.get(index)?.map(|e| e.term == term).unwrap_or(false))
     }
 
-    /// Returns an iterator over log entries in the given index range.
+    /// 返回给定索引范围内的日志条目迭代器。
     pub fn scan(&mut self, range: impl RangeBounds<Index>) -> Iterator<'_> {
         let from = match range.start_bound() {
             Bound::Excluded(&index) => Bound::Excluded(Key::Entry(index).encode()),
@@ -254,33 +229,28 @@ impl Log {
         Iterator::new(self.engine.scan_dyn((from, to)))
     }
 
-    /// Returns an iterator over entries that are ready to apply, starting after
-    /// the current applied index up to the commit index.
+    /// 返回可应用条目的迭代器：从当前 applied 索引之后到 commit 索引。
     pub fn scan_apply(&mut self, applied_index: Index) -> Iterator<'_> {
-        // NB: we don't assert that commit_index >= applied_index, because the
-        // local commit index is not flushed to durable storage -- if lost on
-        // restart, it can be recovered from the logs of a quorum.
+        // 注意：不断言 commit_index >= applied_index，因为本地 commit 索引不刷盘——
+        // 重启丢失后可从多数派日志恢复。
         if applied_index >= self.commit_index {
             return Iterator::new(Box::new(std::iter::empty()));
         }
         self.scan(applied_index + 1..=self.commit_index)
     }
 
-    /// Splices a set of entries into the log and flushes it to disk. New
-    /// indexes will be appended. Overlapping indexes with the same term must be
-    /// equal and will be ignored. Overlapping indexes with different terms will
-    /// truncate the existing log at the first conflict and then splice the new
-    /// entries.
+    /// 将一组条目拼接到日志并刷盘。新索引会追加。
+    /// 重叠且任期相同的索引必须相等并被忽略；重叠但任期不同时，
+    /// 在首个冲突处截断现有日志，再拼接新条目。
     ///
-    /// The entries must have contiguous indexes and equal/increasing terms, and
-    /// the first entry must be in the range [1,last_index+1] with a term at or
-    /// above the previous (base) entry's term and at or below the current term.
+    /// 条目索引必须连续、任期相等或递增；首条索引须在 [1, last_index+1] 内，
+    /// 任期不低于前一条（base）且不超过当前任期。
     pub fn splice(&mut self, entries: Vec<Entry>) -> Result<Index> {
         let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
-            return Ok(self.last_index); // empty input is noop
+            return Ok(self.last_index); // 空输入为 no-op
         };
 
-        // Check that the entries are well-formed.
+        // 检查条目形态是否合法。
         assert!(first.index > 0 && first.term > 0, "spliced entry has index or term 0",);
         assert!(
             entries.windows(2).all(|w| w[0].index + 1 == w[1].index),
@@ -291,8 +261,7 @@ impl Log {
             "spliced entries have term regression",
         );
 
-        // Check that the entries connect to the existing log (if any), and that the
-        // term doesn't regress.
+        // 检查条目能否接到现有日志，且任期不回退。
         assert!(last.term <= self.term, "splice term {} beyond current {}", last.term, self.term);
         match self.get(first.index - 1)? {
             Some(base) if first.term < base.term => {
@@ -303,11 +272,11 @@ impl Log {
             None => panic!("first index {} must touch existing log", first.index),
         }
 
-        // Skip entries that are already in the log.
+        // 跳过日志中已存在的条目。
         let mut entries = entries.as_slice();
         let mut scan = self.scan(first.index..=last.index);
         while let Some(entry) = scan.next().transpose()? {
-            // [0] is ok, because the scan has the same size as entries.
+            // [0] 合法，因为扫描范围与 entries 大小相同。
             assert!(entry.index == entries[0].index, "index mismatch at {entry:?}");
             if entry.term != entries[0].term {
                 break;
@@ -317,14 +286,13 @@ impl Log {
         }
         drop(scan);
 
-        // If all entries already exist then we're done.
+        // 若全部已存在则完成。
         let Some(first) = entries.first() else {
             return Ok(self.last_index);
         };
 
-        // Write the entries that weren't already in the log, and remove the
-        // tail of the old log if any. We can't write below the commit index,
-        // since these entries must be immutable.
+        // 写入尚未存在的条目，并删除旧日志尾部（若有）。
+        // 不能写到 commit 索引以下，那些条目必须不可变。
         assert!(first.index > self.commit_index, "spliced entries below commit index");
 
         for entry in entries {
@@ -342,13 +310,13 @@ impl Log {
         Ok(self.last_index)
     }
 
-    /// Returns log engine status.
+    /// 返回日志引擎状态。
     pub fn status(&mut self) -> Result<storage::Status> {
         self.engine.status()
     }
 }
 
-/// A log entry iterator.
+/// 日志条目迭代器。
 pub struct Iterator<'a> {
     inner: Box<dyn storage::ScanIterator + 'a>,
 }

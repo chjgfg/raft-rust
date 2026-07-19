@@ -1,11 +1,11 @@
-//! In-process 3-node Raft cluster with HashMap/BTreeMap storage.
+//! 使用 HashMap/BTreeMap 存储的进程内 3 节点 Raft 集群示例。
 //!
-//! Demonstrates the standalone library:
-//! * Log storage: `storage::Memory` (in-memory BTreeMap)
-//! * State machine: a simple string key/value map
-//! * Transport: crossbeam channels (no TCP)
+//! 演示独立库的用法：
+//! * 日志存储：`storage::Memory`（内存 BTreeMap）
+//! * 状态机：简单的字符串键值映射
+//! * 传输：crossbeam channel（无 TCP）
 //!
-//! Run with:
+//! 运行：
 //! ```text
 //! cargo run --example kv_cluster
 //! ```
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
-// Application state machine: string key/value store
+// 应用状态机：字符串键值存储
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ impl State for KvState {
                 KvResponse::Put(entry.index).encode()
             }
             Some(other) => panic!("{other:?} submitted as write command"),
-            None => Vec::new(), // Raft no-op after leader election
+            None => Vec::new(), // 领导者选举后的 Raft noop
         };
         self.applied_index = entry.index;
         Ok(response)
@@ -87,12 +87,12 @@ impl State for KvState {
 }
 
 // ---------------------------------------------------------------------------
-// Cluster harness
+// 集群脚手架
 // ---------------------------------------------------------------------------
 
-/// Client handle: submit requests to any local node (followers forward to leader).
+/// 客户端句柄：可向任意本地节点提交请求（跟随者会转发到领导者）。
 struct Client {
-    /// Request injectors for each node. The node thread stamps the current term.
+    /// 各节点的请求注入通道。节点线程会填入当前任期。
     request_txs: HashMap<NodeID, Sender<(Request, Sender<Result<Response>>)>>,
     preferred: NodeID,
 }
@@ -120,7 +120,7 @@ impl Client {
                     }
                     Ok(Err(Error::Abort)) => {
                         last_err = Error::Abort;
-                        // try next node / retry after a short wait
+                        // 尝试下一节点 / 稍后重试
                     }
                     Ok(Err(e)) => return Err(e),
                     Err(_) => {
@@ -174,9 +174,9 @@ impl Client {
     }
 }
 
-/// Spawns an in-process Raft cluster. Returns a client handle.
+/// 启动进程内 Raft 集群，返回客户端句柄。
 fn spawn_cluster(node_ids: &[NodeID]) -> Client {
-    // Peer mailboxes for Raft protocol messages between nodes.
+    // 节点间 Raft 协议消息的同伴邮箱。
     let mut peer_tx: HashMap<NodeID, Sender<Envelope>> = HashMap::new();
     let mut peer_rx: HashMap<NodeID, Receiver<Envelope>> = HashMap::new();
     for &id in node_ids {
@@ -201,7 +201,7 @@ fn spawn_cluster(node_ids: &[NodeID]) -> Client {
 
         let (node_tx, node_rx) = channel::unbounded();
         let log = Log::new(Box::new(Memory::new())).expect("log");
-        // Faster timeouts so the demo elects quickly.
+        // 演示用更快超时，便于快速选主。
         let opts = Options {
             heartbeat_interval: 2,
             election_timeout_range: 5..10,
@@ -217,7 +217,7 @@ fn spawn_cluster(node_ids: &[NodeID]) -> Client {
     Client { request_txs, preferred: node_ids[0] }
 }
 
-/// Event loop for a single Raft node (mirrors toydb's `raft_route`).
+/// 单个 Raft 节点的事件循环（对应 toydb 的 `raft_route`）。
 fn run_node(
     mut node: Node,
     peers_rx: Receiver<Envelope>,
@@ -226,13 +226,13 @@ fn run_node(
     request_rx: Receiver<(Request, Sender<Result<Response>>)>,
 ) {
     let ticker = channel::tick(TICK_INTERVAL);
-    // Pending client response channels, keyed by request id.
+    // 待返回的客户端响应通道，按请求 id 索引。
     let mut response_txs: HashMap<raft::RequestID, Sender<Result<Response>>> = HashMap::new();
     let node_id = node.id();
 
     loop {
         crossbeam::select! {
-            // Advance Raft logical time.
+            // 推进 Raft 逻辑时间。
             recv(ticker) -> _ => {
                 node = match node.tick() {
                     Ok(n) => n,
@@ -243,7 +243,7 @@ fn run_node(
                 };
             }
 
-            // Inbound peer messages.
+            // 入站同伴消息。
             recv(peers_rx) -> msg => {
                 let Ok(msg) = msg else { break };
                 node = match node.step(msg) {
@@ -255,10 +255,10 @@ fn run_node(
                 };
             }
 
-            // Outbound messages from the Raft core.
+            // 来自 Raft 核心的出站消息。
             recv(node_rx) -> msg => {
                 let Ok(msg) = msg else { break };
-                // Local client responses (to == self).
+                // 本地客户端响应（to == self）。
                 if msg.to == node_id {
                     if let Message::ClientResponse { id, response } = msg.message {
                         if let Some(tx) = response_txs.remove(&id) {
@@ -267,7 +267,7 @@ fn run_node(
                     }
                     continue;
                 }
-                // Peer messages.
+                // 同伴消息。
                 if let Some(tx) = peers_tx.get_mut(&msg.to) {
                     match tx.try_send(msg) {
                         Ok(()) => {}
@@ -275,13 +275,13 @@ fn run_node(
                             eprintln!("node {node_id}: peer channel full, dropping message");
                         }
                         Err(channel::TrySendError::Disconnected(_)) => {
-                            // Peer gone; Raft will retry via heartbeats/elections.
+                            // 同伴已消失；Raft 会通过心跳/选举重试。
                         }
                     }
                 }
             }
 
-            // Local client requests — stamp current term like toydb's server.
+            // 本地客户端请求——像 toydb 的 server 一样填入当前任期。
             recv(request_rx) -> result => {
                 let Ok((request, response_tx)) = result else { break };
                 let id = Uuid::new_v4();
@@ -311,7 +311,7 @@ fn main() -> Result<()> {
     println!("Starting 3-node Raft cluster with in-memory (BTreeMap) storage...");
     let mut client = spawn_cluster(&node_ids);
 
-    // Wait for leader election.
+    // 等待领导者选举。
     println!("Waiting for leader election...");
     let mut status = None;
     for _ in 0..50 {
@@ -331,21 +331,21 @@ fn main() -> Result<()> {
     );
     println!("match_index={:?}", status.match_index);
 
-    // Writes
+    // 写
     println!("\nWriting key/value pairs...");
     for (k, v) in [("a", "apple"), ("b", "banana"), ("c", "cherry")] {
         let index = client.put(k, v)?;
         println!("  put {k}={v}  (committed at index {index})");
     }
 
-    // Reads
+    // 读
     println!("\nReading back...");
     for k in ["a", "b", "c", "missing"] {
         let v = client.get(k)?;
         println!("  get {k} => {v:?}");
     }
 
-    // Scan
+    // 扫描
     let all = client.scan()?;
     println!("\nFull scan: {all:?}");
 

@@ -1,21 +1,21 @@
-//! Standalone Raft consensus library, extracted from
-//! [toydb](https://github.com/erikgrinaker/toydb).
+//! 独立的 Raft 共识库，抽取自
+//! [toydb](https://github.com/erikgrinaker/toydb)。
 //!
-//! # Overview
+//! # 概述
 //!
-//! This crate provides a pure Raft consensus node driven by `step()` / `tick()`.
-//! Storage and the application state machine are pluggable:
+//! 本 crate 提供由 `step()` / `tick()` 驱动的纯 Raft 共识节点。
+//! 存储与应用状态机均可插拔：
 //!
-//! * [`storage::Engine`] — ordered key/value store used for the Raft log.
-//!   An in-memory [`storage::Memory`] backend (backed by `BTreeMap`) is included.
-//! * [`raft::State`] — deterministic state machine applied from the committed log.
+//! * [`storage::Engine`] — 用于 Raft 日志的有序键值存储。
+//!   内置内存后端 [`storage::Memory`]（基于 `BTreeMap`）。
+//! * [`raft::State`] — 从已提交日志顺序应用的确定性状态机。
 //!
-//! Networking is **not** included. Outbound messages leave via a
-//! `crossbeam::channel::Sender<raft::Envelope>`; inbound messages are fed back
-//! with [`raft::Node::step`]. See `examples/kv_cluster.rs` for a multi-node
-//! in-process cluster using only channels and `HashMap` storage.
+//! **不包含**网络层。出站消息通过
+//! `crossbeam::channel::Sender<raft::Envelope>` 发出；入站消息用
+//! [`raft::Node::step`] 喂入。参见 `examples/kv_cluster.rs`，其中用 channel
+//! 与内存存储演示了多节点进程内集群。
 //!
-//! # Minimal usage
+//! # 最小用法
 //!
 //! ```ignore
 //! use raft_rust::raft::{self, Log, Node, Options, State};
@@ -26,7 +26,7 @@
 //! let log = Log::new(Box::new(Memory::new()))?;
 //! let state: Box<dyn State> = Box::new(MyState::default());
 //! let node = Node::new(1, peers, log, state, tx, Options::default())?;
-//! // Drive with node.tick()? and node.step(envelope)?
+//! // 通过 node.tick()? 与 node.step(envelope)? 驱动
 //! ```
 
 #![warn(clippy::all)]

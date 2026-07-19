@@ -1,59 +1,46 @@
-//! Implements the Raft distributed consensus protocol.
+//! 实现 Raft 分布式共识协议。
 //!
-//! For details, see Diego Ongaro's original writings:
+//! 细节参见 Diego Ongaro 的原始文献：
 //!
-//! * Raft paper: <https://raft.github.io/raft.pdf>
-//! * Raft thesis: <https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf>
-//! * Raft website: <https://raft.github.io>
+//! * Raft 论文：<https://raft.github.io/raft.pdf>
+//! * Raft 学位论文：<https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf>
+//! * Raft 网站：<https://raft.github.io>
 //!
-//! Raft is a protocol for a group of computers to agree on some data -- or more
-//! simply, to replicate the data. It is broadly equivalent to [Paxos] and
-//! [Viewstamped Replication], but more prescriptive and simpler to understand.
+//! Raft 是一组计算机就某些数据达成一致的协议——更简单地说，就是复制数据。
+//! 它与 [Paxos] 和 [Viewstamped Replication] 大致等价，但规定更明确、更易理解。
 //!
-//! Raft has three main properties:
+//! Raft 有三个主要性质：
 //!
-//! * Fault tolerance: the system tolerates node failures as long as a majority
-//!   of nodes (>50%) remain operational.
+//! * 容错：只要多数节点（>50%）仍在运行，系统就能容忍节点故障。
 //!
-//! * Linearizability (aka strong consistency): once a client write has been
-//!   accepted, it is visible to all clients -- they never see outdated data.
+//! * 线性一致性（强一致性）：客户端写一旦被接受，对所有客户端可见——他们不会看到过期数据。
 //!
-//! * Durability: a write is never lost as long as a majority of nodes remain.
+//! * 持久性：只要多数节点仍在，写就不会丢失。
 //!
-//! It does this by electing a single leader node which serves client requests
-//! and replicates writes to other nodes. Requests are executed once they have
-//! been confirmed by a strict majority of nodes (a quorum). If a leader fails,
-//! a new leader is elected. Clusters have 3 or more nodes, since a two-node
-//! cluster can't tolerate failures (1/2 is not a majority and would lead to
-//! split brain).
+//! 做法是选出单一领导者节点，由它服务客户端请求并向其它节点复制写操作。
+//! 请求在被严格多数（quorum）确认后执行。若领导者失败，则选出新领导者。
+//! 集群通常有 3 个及以上节点，因为两节点集群无法容忍故障（1/2 不是多数，会导致脑裂）。
 //!
-//! Notably, Raft does not provide horizontal scalability. Client requests are
-//! processed by a single leader node which can quickly become a bottleneck, and
-//! each node stores a complete copy of the entire dataset. Systems often handle
-//! this by sharding the data into multiple Raft clusters and using a
-//! distributed transaction protocol across them, but this is out of scope here.
+//! 值得注意的是，Raft 不提供水平扩展。客户端请求由单一领导者处理，容易成为瓶颈，
+//! 且每个节点保存完整数据副本。系统通常通过把数据分片到多个 Raft 集群，并在其间
+//! 使用分布式事务协议来解决，但这超出了本文范围。
 //!
-//! toyDB follows the Raft paper fairly closely, but, like most implementations,
-//! takes some minor artistic liberties.
+//! 本实现基本遵循 Raft 论文，但与多数实现一样做了一些小的取舍。
 //!
 //! [Paxos]: https://www.microsoft.com/en-us/research/uploads/prod/2016/12/paxos-simple-Copy.pdf
 //! [Viewstamped Replication]: https://pmg.csail.mit.edu/papers/vr-revisited.pdf
 //!
-//! RAFT LOG AND STATE MACHINE
-//! ==========================
+//! Raft 日志与状态机
+//! =================
 //!
-//! Raft maintains an ordered command log containing arbitrary write commands
-//! submitted by clients. It attempts to reach consensus on this log by
-//! replicating it to a majority of nodes. If successful, the log is considered
-//! committed and immutable up to that point.
+//! Raft 维护一条有序命令日志，包含客户端提交的任意写命令。它通过把日志复制到
+//! 多数节点来尝试达成共识。成功后，日志到该点为止视为已提交且不可变。
 //!
-//! Once committed, the commands in the log are applied sequentially to a local
-//! state machine on each node. Raft itself doesn't care what the state machine
-//! and commands are -- in toyDB's case it's a SQL database, but it could be
-//! anything. Raft simply passes opaque commands to an opaque state machine.
+//! 一旦提交，日志中的命令会在每个节点上顺序应用到本地状态机。Raft 本身不关心
+//! 状态机与命令是什么——可以是 SQL 数据库，也可以是任何东西。Raft 只是把不透明
+//! 命令交给不透明状态机。
 //!
-//! Each log entry contains an index, the leader's term (see next section), and
-//! the command. For example, a naïve illustration of a toyDB Raft log might be:
+//! 每条日志含索引、领导者任期（见下节）与命令。例如：
 //!
 //! Index | Term | Command
 //! ------|------|------------------------------------------------------
@@ -62,182 +49,124 @@
 //!   3   |   2  | UPDATE table SET value = 'bar' WHERE id = 1
 //!   4   |   2  | DELETE FROM table WHERE id = 1
 //!
-//! The state machine must be deterministic, such that all nodes will reach the
-//! same identical state. Raft will apply the same commands in the same order
-//! independently on all nodes, but if the commands have non-deterministic
-//! behavior such as random number generation or communication with external
-//! systems it can lead to state divergence causing different results.
+//! 状态机必须是确定性的，使所有节点达到相同状态。Raft 会在所有节点上以相同顺序
+//! 应用相同命令；若命令有非确定行为（随机数、外部通信等），会导致状态分叉与结果不一致。
 //!
-//! In toyDB, the Raft log is managed by `Log` and stored locally in a
-//! `storage::Engine`. The state machine interface is the `State` trait. See
-//! their documentation for more details.
+//! 本库中，Raft 日志由 `Log` 管理，本地保存在 `storage::Engine` 中。
+//! 状态机接口是 `State` trait。详见各自文档。
 //!
-//! LEADER ELECTION
-//! ===============
+//! 领导者选举
+//! ==========
 //!
-//! Raft nodes can be in one of three states (or roles): follower, candidate,
-//! and leader. toyDB models these as `Node::Follower`, `Node::Candidate`, and
-//! `Node::Leader`.
+//! Raft 节点可处于三种状态（角色）：跟随者、候选人、领导者。
+//! 本库建模为 `Node::Follower`、`Node::Candidate`、`Node::Leader`。
 //!
-//! * Follower: replicates log entries from a leader. May not know a leader yet.
-//! * Candidate: campaigns for leadership in an election.
-//! * Leader: processes client requests and replicates writes to followers.
+//! * 跟随者：从领导者复制日志。可能尚不知道领导者。
+//! * 候选人：在选举中竞选领导者。
+//! * 领导者：处理客户端请求并向跟随者复制写操作。
 //!
-//! Raft fundamentally relies on a single guarantee: there can be at most one
-//! _valid_ leader at any point in time (old, since-replaced leaders may think
-//! they're still a leader, e.g. during a network partition, but they won't be
-//! able to do anything). It enforces this through the leader election protocol.
+//! Raft 的根本保证是：任意时刻至多有一个**有效**领导者（旧的、已被替换的领导者
+//! 可能仍以为自己是领导者，例如在网络分区时，但它们做不了什么）。
+//! 该保证通过领导者选举协议强制执行。
 //!
-//! Raft divides time into terms, which are monotonically increasing numbers.
-//! Higher terms always take priority over lower terms. There can be at most one
-//! leader in a term, and it can't change. Nodes keep track of their last known
-//! term and store it on disk (see `Log.set_term()`). Messages between nodes are
-//! tagged with the current term (as `Envelope.term`) -- old terms are ignored,
-//! and future terms cause the node to become a follower in that term.
+//! Raft 把时间划分为任期（term），任期是单调递增的数字。更高任期总是优先于更低任期。
+//! 一个任期内至多一个领导者，且不能更换。节点跟踪其已知最后任期并落盘
+//! （见 `Log.set_term_vote()`）。节点间消息带有当前任期（`Envelope.term`）——
+//! 旧任期被忽略，未来任期会使节点成为该任期的跟随者。
 //!
-//! Nodes start out as leaderless followers. If they receive a message from a
-//! leader (in a current or future term), they follow it. Otherwise, they wait
-//! out the election timeout (a few seconds), become candidates, and hold a
-//! leader election.
+//! 节点以无领导者的跟随者起步。若收到领导者消息（当前或未来任期），则跟随它。
+//! 否则等待选举超时（数秒），成为候选人并发起选举。
 //!
-//! Candidates increase their term by 1 and send `Message::Campaign` to all
-//! nodes, requesting their vote. Nodes respond with `Message::CampaignResponse`
-//! saying whether a vote was granted. A node can only grant a single vote in a
-//! term (stored to disk via `Log.set_term()`), on a first-come first-serve
-//! basis, and candidates implicitly vote for themselves.
+//! 候选人把任期加 1，并向所有节点发送 `Message::Campaign` 请求投票。
+//! 节点以 `Message::CampaignResponse` 回复是否授予选票。一个任期内节点只能投一票
+//! （经 `Log.set_term_vote()` 落盘），先到先得；候选人隐式投自己。
 //!
-//! When a candidate receives a majority of votes (>50%), it becomes leader. It
-//! sends a `Message::Heartbeat` to all nodes asserting its leadership, and all
-//! nodes become followers when they receive it (regardless of who they voted
-//! for). Leaders continue to send periodic heartbeats every second or so. The
-//! new leader also appends an empty entry to its log in order to safely commit
-//! all entries from previous terms (Raft paper section 5.4.2).
+//! 候选人获得多数票（>50%）后成为领导者。它向所有节点发送 `Message::Heartbeat`
+//! 声明领导权，收到的节点都成为跟随者（不论原先投给谁）。领导者约每秒发送一次心跳。
+//! 新领导者还会向日志追加一条空条目，以便安全提交此前任期的条目（论文 5.4.2 节）。
 //!
-//! The new leader must have all committed entries in its log (or the cluster
-//! would lose data). To ensure this, there is one additional condition for
-//! granting a vote: the candidate's log must be at least as up-to-date as the
-//! voter. Because an entry must be replicated to a majority before being
-//! committed, this ensures a candidate can only win a majority of votes if its
-//! log is up-to-date with all committed entries (Raft paper section 5.4.1).
+//! 新领导者日志中必须包含所有已提交条目（否则集群会丢数据）。为此，授予选票还有
+//! 一个条件：候选人的日志至少与投票者一样新。因为条目必须复制到多数才提交，
+//! 这保证只有日志已包含全部已提交条目的候选人才能赢得多数票（论文 5.4.1 节）。
 //!
-//! It's possible that no candidate wins an election, for example due to a tie
-//! or a majority of nodes being offline. After an election timeout passes,
-//! candidates will again bump their term and start a new election, until a
-//! leader can be established. To avoid frequent ties, nodes use different,
-//! randomized election timeouts (Raft paper section 5.2).
+//! 也可能没有候选人获胜，例如平票或多数节点离线。选举超时后，候选人再次提升任期
+//! 并发起新选举，直到选出领导者。为避免频繁平票，节点使用不同的随机选举超时
+//! （论文 5.2 节）。
 //!
-//! Similarly, if a follower doesn't hear from a leader in an election timeout
-//! interval, it will become candidate and hold another election. The periodic
-//! leader heartbeats prevent this as long as the leader is running and
-//! connected. A node that becomes disconnected from the leader will continually
-//! hold new elections by itself until the network heals, at which point a new
-//! election will be held in its term (disrupting the current leader).
+//! 类似地，若跟随者在一个选举超时内未收到领导者消息，会成为候选人并发起选举。
+//! 只要领导者在运行且连通，周期性心跳会阻止这种情况。与领导者断连的节点会不断
+//! 独自发起选举，直到网络恢复，届时会在其任期举行新选举（打断当前领导者）。
 //!
-//! REPLICATION AND CONSENSUS
-//! =========================
+//! 复制与共识
+//! ==========
 //!
-//! When the leader receives a client write request, it appends the command to
-//! its local log via `Log.append()`, and sends the log entry to all peers in
-//! a `Message::Append`. Followers will attempt to durably append the entry to
-//! their local logs and respond with `Message::AppendResponse`.
+//! 领导者收到客户端写请求时，经 `Log.append()` 追加到本地日志，并以
+//! `Message::Append` 发送给所有同伴。跟随者尝试持久追加到本地日志，并以
+//! `Message::AppendResponse` 响应。
 //!
-//! Once a majority have acknowledged the append, the leader commits the entry
-//! via `Log.commit()` and applies it to its local state machine, returning the
-//! result to the client. It will inform followers about the commit in the next
-//! heartbeat as `Message::Heartbeat.commit_index` so they can apply it too, but
-//! this is not necessary for correctness (they will commit and apply it if they
-//! become leader, otherwise they have no need for applying it).
+//! 一旦多数确认追加，领导者经 `Log.commit()` 提交该条目，应用到本地状态机，
+//! 并把结果返回客户端。它会在下一次心跳的 `Message::Heartbeat.commit_index` 中
+//! 通知跟随者，以便它们也应用——但这不是正确性所必需的（它们成为领导者时会提交并应用；
+//! 否则不必应用）。
 //!
-//! Followers may not be able to append the entry to their log -- they may be
-//! unreachable, lag behind the leader, or have divergent logs (see Raft paper
-//! section 5.3). The `Append` contains the index and term of the log entry
-//! immediately before the replicated entry as `base_index` and `base_term`. An
-//! index/term pair uniquely identifies a command, and if two logs have the same
-//! index/term pair then the logs are identical up to and including that entry
-//! (Raft paper section 5.3). If the base index/term matches the follower's log,
-//! it appends the entry (potentially replacing any conflicting entries),
-//! otherwise it rejects it.
+//! 跟随者可能无法追加：不可达、落后，或日志分叉（论文 5.3 节）。
+//! `Append` 含被复制条目前一条的索引与任期，即 `base_index` 与 `base_term`。
+//! 索引/任期对唯一标识命令；若两份日志有相同索引/任期对，则到该条目为止日志相同
+//! （论文 5.3 节）。若 base 匹配跟随者日志，则追加（可能替换冲突条目），否则拒绝。
 //!
-//! When a follower rejects an append, the leader must try to find a common log
-//! entry that exists in both its and the follower's log where it can resume
-//! replication. It does this by sending `Message::Append` probes only
-//! containing a base index/term but no entries -- it will continue to probe
-//! decreasing indexes one by one until the follower responds with a match, then
-//! send an `Append` with the missing entries (Raft paper section 5.3). It keeps
-//! track of each follower's `match_index` and `next_index` in a `Progress`
-//! struct to manage this.
+//! 跟随者拒绝 append 时，领导者必须找到双方日志中的公共条目以恢复复制。
+//! 做法是发送仅含 base 索引/任期、不含条目的 `Message::Append` 探测——
+//! 逐个递减索引探测，直到跟随者响应匹配，再发送含缺失条目的 `Append`（论文 5.3 节）。
+//! 用 `Progress` 结构跟踪每个跟随者的 `match_index` 与 `next_index`。
 //!
-//! In case `Append` messages or responses are lost, leaders also send their
-//! `last_index` and term in each `Heartbeat`. If followers don't have that
-//! index/term pair in their log, they'll say so in the `HeartbeatResponse` and
-//! the leader can begin probing their logs as with append rejections.
+//! 若 `Append` 消息或响应丢失，领导者还会在每次 `Heartbeat` 中发送 `last_index` 与任期。
+//! 若跟随者日志中没有该索引/任期对，会在 `HeartbeatResponse` 中说明，
+//! 领导者可像 append 被拒时一样开始探测其日志。
 //!
-//! CLIENT REQUESTS
-//! ===============
+//! 客户端请求
+//! ==========
 //!
-//! Client requests are submitted as `Message::ClientRequest` to the local Raft
-//! node. They are only processed on the leader, but followers will proxy them
-//! to the leader (Raft thesis section 6.2). To avoid complications with message
-//! replays (Raft thesis section 6.3), requests are not retried internally, and
-//! are explicitly aborted with `Error::Abort` on leader/term changes as well as
-//! elections.
+//! 客户端请求以 `Message::ClientRequest` 提交给本地 Raft 节点。只在领导者上处理，
+//! 但跟随者会代理到领导者（学位论文 6.2 节）。为避免消息重放的复杂问题
+//! （学位论文 6.3 节），内部不重试请求，并在领导者/任期变更以及选举时以
+//! `Error::Abort` 明确中止。
 //!
-//! Write requests, `Request::Write`, are appended to the Raft log and
-//! replicated. The leader keeps track of the request and its log index in a
-//! `Write` struct. Once the command is committed and applied to the local state
-//! machine, the leader looks up the write request by its log index and sends
-//! the result to the client. Deterministic errors (e.g. foreign key violations)
-//! are also returned to the client, but non-deterministic errors (e.g. IO
-//! errors) must panic the node to avoid state divergence.
+//! 写请求 `Request::Write` 追加到 Raft 日志并复制。领导者用 `Write` 结构跟踪请求
+//! 及其日志索引。命令提交并应用到本地状态机后，领导者按日志索引查找写请求并把结果
+//! 发给客户端。确定性错误（如外键冲突）也返回客户端；非确定性错误（如 IO 错误）
+//! 必须让节点 panic，以免状态分叉。
 //!
-//! Read requests, `Request::Read`, are only executed on the leader and don't
-//! need to be replicated via the Raft log. However, to ensure linearizability,
-//! the leader has to confirm with a quorum that it's actually still the leader.
-//! Otherwise, it's possible that a new leader has been elected elsewhere and
-//! executed writes without us knowing about it. It does this by assigning an
-//! incrementing sequence number to each read, keeping track of the request in a
-//! `Read` struct, and immediately sending a `Read` message with the latest
-//! sequence number. Followers respond with the sequence number, and once a
-//! quorum have confirmed a sequence number the read is executed and the result
-//! returned to the client.
+//! 读请求 `Request::Read` 只在领导者执行，不必经 Raft 日志复制。但为确保线性一致性，
+//! 领导者必须与多数确认自己仍是领导者。否则别处可能已选出新领导者并执行了写操作。
+//! 做法是为每次读分配递增序列号，用 `Read` 结构跟踪请求，并立即发送带最新序列号的
+//! `Read` 消息。跟随者用序列号响应，多数确认后执行读并把结果返回客户端。
 //!
-//! IMPLEMENTATION CAVEATS
-//! ======================
+//! 实现取舍
+//! ========
 //!
-//! For simplicity, toyDB implements the bare minimum for a functional and
-//! correct Raft protocol, and omits several advanced mechanisms that would be
-//! needed for a real production system. In particular:
+//! 为简单起见，本实现只覆盖正确可用的最小 Raft，省略了生产系统需要的若干高级机制：
 //!
-//! * No leases: for linearizability, every read request requires the leader to
-//!   confirm with followers that it's still the leader. This could be avoided
-//!   with a leader lease for a predefined time interval (Raft paper section 8,
-//!   Raft thesis section 6.3).
+//! * 无租约：为保证线性一致性，每次读都要求领导者与跟随者确认自己仍是领导者。
+//!   可用预定义时间间隔的领导者租约避免（论文 8 节、学位论文 6.3 节）。
 //!
-//! * No cluster membership changes: to add or remove nodes, the entire cluster
-//!   must be stopped and restarted with the new configuration, otherwise it
-//!   risks multiple leaders (Raft paper section 6).
+//! * 无集群成员变更：增删节点须停止整个集群并以新配置重启，否则可能多领导者
+//!   （论文 6 节）。
 //!
-//! * No snapshots: new or lagging nodes must be caught up by replicating and
-//!   replaying the entire log, instead of sending a state machine snapshot
-//!   (Raft paper section 7).
+//! * 无快照：新节点或落后节点须通过复制并重放整份日志追赶，而不能发送状态机快照
+//!   （论文 7 节）。
 //!
-//! * No log truncation: because snapshots aren't supported, the entire Raft
-//!   log must be retained forever in order to catch up new/lagging nodes,
-//!   leading to excessive storage use (Raft paper section 7).
+//! * 无日志截断：因不支持快照，整份 Raft 日志须永久保留以追赶新/落后节点，
+//!   导致存储占用过大（论文 7 节）。
 //!
-//! * No pre-vote or check-quorum: a node that's partially partitioned (can
-//!   reach some but not all nodes) can cause persistent unavailability with
-//!   spurious elections or heartbeats. A node rejoining after a partition can
-//!   also temporarily disrupt a leader. This requires additional pre-vote and
-//!   check-quorum protocol extensions (Raft thesis section 4.2.3 and 9.6).
+//! * 无 pre-vote 或 check-quorum：部分分区的节点（能到达部分但非全部节点）
+//!   可能因虚假选举或心跳导致持续不可用。分区后重新加入的节点也可能暂时干扰领导者。
+//!   这需要 pre-vote 与 check-quorum 协议扩展（学位论文 4.2.3 与 9.6 节）。
 //!
-//! * No request retries: client requests will not be retried on leader changes
-//!   or message loss, and will be aggressively aborted, to ignore problems
-//!   related to message replay (Raft thesis section 6.3).
+//! * 无请求重试：领导者变更或消息丢失时不重试客户端请求，并积极中止，
+//!   以规避消息重放问题（学位论文 6.3 节）。
 //!
-//! * No reject hints: if a follower has a divergent log, the leader will probe
-//!   entries one by one until a match is found. The replication protocol could
-//!   instead be extended with rejection hints (Raft paper section 5.3).
+//! * 无拒绝提示：若跟随者日志分叉，领导者逐条探测直到找到匹配。
+//!   复制协议可用拒绝提示扩展（论文 5.3 节）。
 
 pub mod kv;
 mod log;
@@ -253,15 +182,14 @@ pub use message::{Envelope, Message, ReadSequence, Request, RequestID, Response,
 pub use node::{Node, NodeID, Options, Term, Ticks};
 pub use state::State;
 
-/// The interval between Raft ticks, the Raft unit of time.
+/// Raft tick 的时间间隔，即 Raft 的时间单位。
 pub const TICK_INTERVAL: Duration = Duration::from_millis(100);
 
-/// The interval between leader heartbeats in ticks.
+/// 领导者心跳间隔（以 tick 计）。
 const HEARTBEAT_INTERVAL: Ticks = 4;
 
-/// The default election timeout range in ticks. To avoid election ties, a node
-/// chooses a random value in this interval.
+/// 默认选举超时范围（以 tick 计）。为避免选举平票，节点在此区间内随机取值。
 const ELECTION_TIMEOUT_RANGE: Range<Ticks> = 10..20;
 
-/// The maximum number of log entries to send in a single append message.
+/// 单条 Append 消息中最多发送的日志条目数。
 const MAX_APPEND_ENTRIES: usize = 100;
