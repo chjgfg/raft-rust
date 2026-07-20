@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 
 use crossbeam::channel;
-use raft_rust::encoding::Value as _;
 use raft_rust::error::Result;
 use raft_rust::raft::kv::{self, Kv};
 use raft_rust::raft::{Envelope, Log, Message, Node, Options, Request, Response};
@@ -46,12 +45,12 @@ fn single_node_becomes_leader_and_serves_kv() -> Result<()> {
         term,
         message: Message::ClientRequest {
             id: put_id,
-            request: Request::Write(put_cmd.encode()),
+            request: Request::Write(kv::encode(&put_cmd)),
         },
     })?;
     match take_response(&rx, put_id)? {
         Response::Write(bytes) => {
-            assert!(matches!(kv::Response::decode(&bytes)?, kv::Response::Put(_)));
+            assert!(matches!(kv::decode::<kv::Response>(&bytes)?, kv::Response::Put(_)));
         }
         other => panic!("expected Write, got {other:?}"),
     }
@@ -66,12 +65,15 @@ fn single_node_becomes_leader_and_serves_kv() -> Result<()> {
         term,
         message: Message::ClientRequest {
             id: get_id,
-            request: Request::Read(get_cmd.encode()),
+            request: Request::Read(kv::encode(&get_cmd)),
         },
     })?;
     match take_response(&rx, get_id)? {
         Response::Read(bytes) => {
-            assert_eq!(kv::Response::decode(&bytes)?, kv::Response::Get(Some("world".into())));
+            assert_eq!(
+                kv::decode::<kv::Response>(&bytes)?,
+                kv::Response::Get(Some("world".into()))
+            );
         }
         other => panic!("expected Read, got {other:?}"),
     }

@@ -70,18 +70,6 @@ impl<T> From<Error> for Result<T> {
     }
 }
 
-impl serde::de::Error for Error {
-    fn custom<T: Display>(msg: T) -> Self {
-        Error::InvalidData(msg.to_string())
-    }
-}
-
-impl serde::ser::Error for Error {
-    fn custom<T: Display>(msg: T) -> Self {
-        Error::InvalidData(msg.to_string())
-    }
-}
-
 impl From<bincode::error::DecodeError> for Error {
     fn from(err: bincode::error::DecodeError) -> Self {
         Error::InvalidData(err.to_string())

@@ -3,12 +3,24 @@ use std::ops::{Bound, RangeBounds};
 use serde::{Deserialize, Serialize};
 
 use super::{NodeID, Term};
-use crate::encoding::{self, Key as _, Value as _, bincode};
 use crate::error::Result;
 use crate::storage;
 
 /// 日志索引（条目位置）。从 1 开始；0 表示无索引。
 pub type Index = u64;
+
+/// Bincode 标准配置，用于日志条目与元数据的序列化。
+const BINCODE: bincode::config::Configuration = bincode::config::standard();
+
+/// 用 bincode 序列化值。
+fn encode_value<T: Serialize>(value: &T) -> Vec<u8> {
+    bincode::serde::encode_to_vec(value, BINCODE).expect("value must be serializable")
+}
+
+/// 用 bincode 反序列化值。
+fn decode_value<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T> {
+    Ok(bincode::serde::borrow_decode_from_slice(bytes, BINCODE)?.0)
+}
 
 /// 包含状态机命令的日志条目。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,10 +35,24 @@ pub struct Entry {
     pub command: Option<Vec<u8>>,
 }
 
-impl encoding::Value for Entry {}
+impl Entry {
+    fn encode(&self) -> Vec<u8> {
+        encode_value(self)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        decode_value(bytes)
+    }
+}
 
 /// 日志存储键。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// 编码为固定前缀 + 可选的大端索引，保证 `Entry(i)` 按索引字典序排列，
+/// 且全部 Entry 键排在元数据键之前：
+/// * `Entry(index)` → `[0x00] ‖ index.to_be_bytes()`
+/// * `TermVote`     → `[0x01]`
+/// * `CommitIndex`  → `[0x02]`
+#[derive(Clone, Debug, PartialEq)]
 pub enum Key {
     /// 日志条目，保存任期与命令。
     Entry(Index),
@@ -36,7 +62,21 @@ pub enum Key {
     CommitIndex,
 }
 
-impl encoding::Key<'_> for Key {}
+impl Key {
+    /// 编码为有序字节键。
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Key::Entry(index) => {
+                let mut buf = Vec::with_capacity(1 + 8);
+                buf.push(0x00);
+                buf.extend_from_slice(&index.to_be_bytes());
+                buf
+            }
+            Key::TermVote => vec![0x01],
+            Key::CommitIndex => vec![0x02],
+        }
+    }
+}
 
 /// Raft 日志保存一系列任意命令（通常是写操作），在节点间复制，并顺序应用到本地状态机。
 /// 每条日志含索引、命令，以及领导者提出它时的任期。命令可为 noop（None），
@@ -103,7 +143,8 @@ impl Log {
         // 从磁盘加载初始内存状态。
         let (term, vote) = engine
             .get(&Key::TermVote.encode())?
-            .map(|v| bincode::deserialize(&v))
+            .as_deref()
+            .map(decode_value)
             .transpose()?
             .unwrap_or((0, None));
         let (last_index, last_term) = engine
@@ -119,7 +160,8 @@ impl Log {
             .unwrap_or((0, 0));
         let (commit_index, commit_term) = engine
             .get(&Key::CommitIndex.encode())?
-            .map(|v| bincode::deserialize(&v))
+            .as_deref()
+            .map(decode_value)
             .transpose()?
             .unwrap_or((0, 0));
 
@@ -157,7 +199,7 @@ impl Log {
         if term == self.term && vote == self.vote {
             return Ok(());
         }
-        self.engine.set(&Key::TermVote.encode(), bincode::serialize(&(term, vote)))?;
+        self.engine.set(&Key::TermVote.encode(), encode_value(&(term, vote)))?;
         // 即使 Log::fsync = false 也总是 fsync。任期变更很少，对性能影响不大，
         // 而双重投票可能导致多领导者与脑裂，后果严重。
         self.engine.flush()?;
@@ -190,7 +232,7 @@ impl Log {
             Some(entry) => entry.term,
             None => panic!("commit index {index} does not exist"),
         };
-        self.engine.set(&Key::CommitIndex.encode(), bincode::serialize(&(index, term)))?;
+        self.engine.set(&Key::CommitIndex.encode(), encode_value(&(index, term)))?;
         // 注意：commit 索引不必 fsync，因为条目已 fsync，且可从多数派日志恢复。
         self.commit_index = index;
         self.commit_term = term;

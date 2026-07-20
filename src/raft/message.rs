@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{Entry, Index, NodeID, Term};
-use crate::encoding;
 use crate::error::Result;
 use crate::storage;
 
@@ -19,8 +18,6 @@ pub struct Envelope {
     /// 消息本体。
     pub message: Message,
 }
-
-impl encoding::Value for Envelope {}
 
 /// Raft 节点之间发送的消息。消息异步发送（非请求/响应模式），可能丢失或乱序。
 ///
@@ -144,8 +141,6 @@ pub enum Request {
     Status,
 }
 
-impl encoding::Value for Request {}
-
 /// 客户端响应。外层用 Result 表示错误。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Response {
@@ -156,8 +151,6 @@ pub enum Response {
     /// 当前 Raft 领导者状态。
     Status(Status),
 }
-
-impl encoding::Value for Response {}
 
 /// Raft 集群状态，由领导者生成。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

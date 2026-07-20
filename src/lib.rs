@@ -34,7 +34,6 @@
 #![allow(clippy::module_inception)]
 #![allow(clippy::type_complexity)]
 
-pub mod encoding;
 pub mod error;
 pub mod raft;
 pub mod storage;

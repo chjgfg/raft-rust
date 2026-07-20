@@ -94,16 +94,13 @@ src/
   raft/
     mod.rs          协议文档与常量
     node.rs         Follower / Candidate / Leader 状态机
-    log.rs          基于 Engine 的复制日志
+    log.rs          基于 Engine 的复制日志（内联键编码 + bincode 值编码）
     message.rs      Envelope、Message、Request、Response
     state.rs        State trait
     kv.rs           示例用字符串 KV 状态机
   storage/
     engine.rs       Engine trait（有序 KV）
     memory.rs       内存 BTreeMap 引擎
-  encoding/
-    bincode.rs      值编码
-    keycode.rs      保序键编码
 examples/
   kv_cluster.rs     3 节点集群演示
 tests/

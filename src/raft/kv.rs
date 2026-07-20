@@ -8,8 +8,20 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use super::{Entry, Index, State};
-use crate::encoding::{self, Value as _};
 use crate::error::Result;
+
+/// Bincode 标准配置，用于命令 / 响应编码。
+const BINCODE: bincode::config::Configuration = bincode::config::standard();
+
+/// 用 bincode 编码应用层值。
+pub fn encode<T: Serialize>(value: &T) -> Vec<u8> {
+    bincode::serde::encode_to_vec(value, BINCODE).expect("value must be serializable")
+}
+
+/// 用 bincode 解码应用层值。
+pub fn decode<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T> {
+    Ok(bincode::serde::borrow_decode_from_slice(bytes, BINCODE)?.0)
+}
 
 /// 由 Raft 驱动的内存字符串键值存储。
 #[derive(Default)]
@@ -36,11 +48,11 @@ impl State for Kv {
     }
 
     fn apply(&mut self, entry: Entry) -> Result<Vec<u8>> {
-        let command = entry.command.as_deref().map(Command::decode).transpose()?;
+        let command = entry.command.as_deref().map(decode::<Command>).transpose()?;
         let response = match command {
             Some(Command::Put { key, value }) => {
                 self.data.insert(key, value);
-                Response::Put(entry.index).encode()
+                encode(&Response::Put(entry.index))
             }
             Some(c @ (Command::Get { .. } | Command::Scan)) => {
                 panic!("{c} submitted as write command")
@@ -52,16 +64,15 @@ impl State for Kv {
     }
 
     fn read(&self, command: Vec<u8>) -> Result<Vec<u8>> {
-        match Command::decode(&command)? {
-            Command::Get { key } => Ok(Response::Get(self.data.get(&key).cloned()).encode()),
-            Command::Scan => Ok(Response::Scan(self.data.clone()).encode()),
+        match decode::<Command>(&command)? {
+            Command::Get { key } => Ok(encode(&Response::Get(self.data.get(&key).cloned()))),
+            Command::Scan => Ok(encode(&Response::Scan(self.data.clone()))),
             c @ Command::Put { .. } => panic!("{c} submitted as read command"),
         }
     }
 }
 
-/// 键值命令。先用 [`encoding::Value::encode`] 编码，
-/// 再包装进 [`super::Request::Read`] / [`super::Request::Write`]。
+/// 键值命令。先用 [`encode`] 编码，再包装进 [`super::Request::Read`] / [`super::Request::Write`]。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Command {
     /// 获取给定键的值。
@@ -71,8 +82,6 @@ pub enum Command {
     /// 返回全部键值对。
     Scan,
 }
-
-impl encoding::Value for Command {}
 
 impl Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -94,8 +103,6 @@ pub enum Response {
     /// Scan 返回的全部键值对。
     Scan(BTreeMap<String, String>),
 }
-
-impl encoding::Value for Response {}
 
 impl Display for Response {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

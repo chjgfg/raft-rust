@@ -2,13 +2,25 @@ use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 
-use crate::encoding::keycode;
 use crate::error::Result;
+
+/// 为键前缀生成扫描范围。
+///
+/// 排他上界通过对最后一个非 `0xff` 字节加 1 得到；若前缀全是 `0xff`，
+/// 则上界无界（其后不可能再有其它前缀）。
+pub fn prefix_range(prefix: &[u8]) -> (Bound<Vec<u8>>, Bound<Vec<u8>>) {
+    let start = Bound::Included(prefix.to_vec());
+    let end = match prefix.iter().rposition(|&b| b != 0xff) {
+        Some(i) => Bound::Excluded(
+            prefix.iter().take(i).copied().chain(std::iter::once(prefix[i] + 1)).collect(),
+        ),
+        None => Bound::Unbounded,
+    };
+    (start, end)
+}
 
 /// 键值存储引擎，保存任意字节串。键按字典序维护，因此支持范围扫描。
 /// 例如：扫描某张表的全部行（共用键前缀），或扫描 Raft 日志尾部（给定索引之后）。
-///
-/// 键应使用保持顺序的 Keycode 编码，参见 [`crate::encoding::keycode`]。
 ///
 /// 只有在调用 [`Engine::flush()`] 之后，写入才保证落盘。
 ///
@@ -42,7 +54,7 @@ pub trait Engine: Send {
     where
         Self: Sized, // 在 trait 对象中省略，以保持 dyn 兼容
     {
-        self.scan(keycode::prefix_range(prefix))
+        self.scan(prefix_range(prefix))
     }
 
     /// 设置键的值；若已存在则覆盖。

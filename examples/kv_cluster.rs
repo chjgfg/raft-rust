@@ -15,7 +15,6 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam::channel::{self, Receiver, Sender};
-use raft_rust::encoding::Value as _;
 use raft_rust::error::{Error, Result};
 use raft_rust::raft::{
     self, Envelope, Entry, Index, Log, Message, Node, NodeID, Options, Request, Response, State,
@@ -24,6 +23,20 @@ use raft_rust::raft::{
 use raft_rust::storage::Memory;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// 应用层编解码（bincode）
+// ---------------------------------------------------------------------------
+
+const BINCODE: bincode::config::Configuration = bincode::config::standard();
+
+fn encode<T: Serialize>(value: &T) -> Vec<u8> {
+    bincode::serde::encode_to_vec(value, BINCODE).expect("value must be serializable")
+}
+
+fn decode<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> Result<T> {
+    Ok(bincode::serde::borrow_decode_from_slice(bytes, BINCODE)?.0)
+}
 
 // ---------------------------------------------------------------------------
 // 应用状态机：字符串键值存储
@@ -36,16 +49,12 @@ enum KvCommand {
     Scan,
 }
 
-impl raft_rust::encoding::Value for KvCommand {}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum KvResponse {
     Get(Option<String>),
     Put(Index),
     Scan(BTreeMap<String, String>),
 }
-
-impl raft_rust::encoding::Value for KvResponse {}
 
 struct KvState {
     applied_index: Index,
@@ -64,11 +73,11 @@ impl State for KvState {
     }
 
     fn apply(&mut self, entry: Entry) -> Result<Vec<u8>> {
-        let command = entry.command.as_deref().map(KvCommand::decode).transpose()?;
+        let command = entry.command.as_deref().map(decode::<KvCommand>).transpose()?;
         let response = match command {
             Some(KvCommand::Put { key, value }) => {
                 self.data.insert(key, value);
-                KvResponse::Put(entry.index).encode()
+                encode(&KvResponse::Put(entry.index))
             }
             Some(other) => panic!("{other:?} submitted as write command"),
             None => Vec::new(), // 领导者选举后的 Raft noop
@@ -78,9 +87,9 @@ impl State for KvState {
     }
 
     fn read(&self, command: Vec<u8>) -> Result<Vec<u8>> {
-        match KvCommand::decode(&command)? {
-            KvCommand::Get { key } => Ok(KvResponse::Get(self.data.get(&key).cloned()).encode()),
-            KvCommand::Scan => Ok(KvResponse::Scan(self.data.clone()).encode()),
+        match decode::<KvCommand>(&command)? {
+            KvCommand::Get { key } => Ok(encode(&KvResponse::Get(self.data.get(&key).cloned()))),
+            KvCommand::Scan => Ok(encode(&KvResponse::Scan(self.data.clone()))),
             other => panic!("{other:?} submitted as read command"),
         }
     }
@@ -134,9 +143,12 @@ impl Client {
     }
 
     fn put(&mut self, key: &str, value: &str) -> Result<Index> {
-        let req = Request::Write(KvCommand::Put { key: key.into(), value: value.into() }.encode());
+        let req = Request::Write(encode(&KvCommand::Put {
+            key: key.into(),
+            value: value.into(),
+        }));
         match self.request(req)? {
-            Response::Write(bytes) => match KvResponse::decode(&bytes)? {
+            Response::Write(bytes) => match decode::<KvResponse>(&bytes)? {
                 KvResponse::Put(index) => Ok(index),
                 other => Err(Error::InvalidData(format!("unexpected write response: {other:?}"))),
             },
@@ -145,9 +157,9 @@ impl Client {
     }
 
     fn get(&mut self, key: &str) -> Result<Option<String>> {
-        let req = Request::Read(KvCommand::Get { key: key.into() }.encode());
+        let req = Request::Read(encode(&KvCommand::Get { key: key.into() }));
         match self.request(req)? {
-            Response::Read(bytes) => match KvResponse::decode(&bytes)? {
+            Response::Read(bytes) => match decode::<KvResponse>(&bytes)? {
                 KvResponse::Get(v) => Ok(v),
                 other => Err(Error::InvalidData(format!("unexpected read response: {other:?}"))),
             },
@@ -156,9 +168,9 @@ impl Client {
     }
 
     fn scan(&mut self) -> Result<BTreeMap<String, String>> {
-        let req = Request::Read(KvCommand::Scan.encode());
+        let req = Request::Read(encode(&KvCommand::Scan));
         match self.request(req)? {
-            Response::Read(bytes) => match KvResponse::decode(&bytes)? {
+            Response::Read(bytes) => match decode::<KvResponse>(&bytes)? {
                 KvResponse::Scan(map) => Ok(map),
                 other => Err(Error::InvalidData(format!("unexpected scan response: {other:?}"))),
             },
