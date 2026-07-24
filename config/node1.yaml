@@ -1,0 +1,18 @@
+# 节点 1
+node:
+  id: 1
+  listen: "127.0.0.1:7001"
+  data_dir: "data/node1"
+
+peers:
+  - { id: 2, addr: "127.0.0.1:7002" }
+  - { id: 3, addr: "127.0.0.1:7003" }
+
+options:
+  heartbeat_interval: 2
+  election_timeout_min: 5
+  election_timeout_max: 10
+  max_append_entries: 100
+  pre_vote: true
+  check_quorum: true
+  snapshot_threshold: 1000

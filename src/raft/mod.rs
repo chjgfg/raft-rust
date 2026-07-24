@@ -149,18 +149,15 @@
 //! * 无租约：为保证线性一致性，每次读都要求领导者与跟随者确认自己仍是领导者。
 //!   可用预定义时间间隔的领导者租约避免（论文 8 节、学位论文 6.3 节）。
 //!
-//! * 无集群成员变更：增删节点须停止整个集群并以新配置重启，否则可能多领导者
-//!   （论文 6 节）。
+//! * 已实现联合共识成员变更（论文 6 节）：`Request::ChangeMembership`。
+//!
+//! * 已实现 Pre-vote 与 CheckQuorum（可通过 `Options` 关闭）。
 //!
 //! * 无快照：新节点或落后节点须通过复制并重放整份日志追赶，而不能发送状态机快照
 //!   （论文 7 节）。
 //!
 //! * 无日志截断：因不支持快照，整份 Raft 日志须永久保留以追赶新/落后节点，
 //!   导致存储占用过大（论文 7 节）。
-//!
-//! * 无 pre-vote 或 check-quorum：部分分区的节点（能到达部分但非全部节点）
-//!   可能因虚假选举或心跳导致持续不可用。分区后重新加入的节点也可能暂时干扰领导者。
-//!   这需要 pre-vote 与 check-quorum 协议扩展（学位论文 4.2.3 与 9.6 节）。
 //!
 //! * 无请求重试：领导者变更或消息丢失时不重试客户端请求，并积极中止，
 //!   以规避消息重放问题（学位论文 6.3 节）。
@@ -170,16 +167,20 @@
 
 pub mod kv;
 mod log;
+pub mod membership;
 mod message;
 mod node;
+pub mod session;
 mod state;
 
 use std::ops::Range;
 use std::time::Duration;
 
 pub use log::{Entry, Index, Key, Log};
+pub use membership::{Membership, MembershipEntry, MembershipState};
 pub use message::{Envelope, Message, ReadSequence, Request, RequestID, Response, Status};
 pub use node::{Node, NodeID, Options, Term, Ticks};
+pub use session::{encode_session, SessionState};
 pub use state::State;
 
 /// Raft tick 的时间间隔，即 Raft 的时间单位。

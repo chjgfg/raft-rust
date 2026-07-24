@@ -2,6 +2,7 @@ use std::ops::{Bound, RangeBounds};
 
 use serde::{Deserialize, Serialize};
 
+use super::membership::MembershipEntry;
 use super::{NodeID, Term};
 use crate::error::Result;
 use crate::storage;
@@ -32,7 +33,11 @@ pub struct Entry {
     /// 条目被加入时的任期。
     pub term: Term,
     /// 状态机命令。None（noop）用于领导者选举时提交旧条目，见 Raft 论文 5.4.2 节。
+    /// 与 [`Self::membership`] 互斥：成员变更条目的 command 应为 None。
     pub command: Option<Vec<u8>>,
+    /// 集群成员配置变更（联合共识 / 单一配置）。追加到日志后立即生效。
+    #[serde(default)]
+    pub membership: Option<MembershipEntry>,
 }
 
 impl Entry {
@@ -52,6 +57,8 @@ impl Entry {
 /// * `Entry(index)` → `[0x00] ‖ index.to_be_bytes()`
 /// * `TermVote`     → `[0x01]`
 /// * `CommitIndex`  → `[0x02]`
+/// * `SnapshotMeta` → `[0x03]`  (last_included_index, last_included_term)
+/// * `SnapshotData` → `[0x04]`  状态机快照字节
 #[derive(Clone, Debug, PartialEq)]
 pub enum Key {
     /// 日志条目，保存任期与命令。
@@ -60,6 +67,10 @@ pub enum Key {
     TermVote,
     /// 保存当前 commit 索引（若有）。
     CommitIndex,
+    /// 快照元数据：`(last_included_index, last_included_term)`。
+    SnapshotMeta,
+    /// 状态机快照原始字节。
+    SnapshotData,
 }
 
 impl Key {
@@ -74,6 +85,8 @@ impl Key {
             }
             Key::TermVote => vec![0x01],
             Key::CommitIndex => vec![0x02],
+            Key::SnapshotMeta => vec![0x03],
+            Key::SnapshotData => vec![0x04],
         }
     }
 }
@@ -111,7 +124,7 @@ impl Key {
 /// * 条目任期不超过当前任期。
 /// * 追加的条目是持久的（刷盘）。
 /// * 追加的条目使用当前任期。
-/// * 已提交条目永不更改或删除（无日志截断）。
+/// * 已提交条目在快照后可截断前缀（见 [`Log::compact_to`]）。
 /// * 已提交条目最终会复制到所有节点。
 /// * 相同索引/任期的条目含相同命令。
 /// * 若两份日志在某索引/任期匹配，则此前所有条目相同（见论文 5.3 节）。
@@ -123,6 +136,10 @@ pub struct Log {
     term: Term,
     /// 本任期的领导者投票（若有）。
     vote: Option<NodeID>,
+    /// 日志中仍保留的第一条条目索引（截断后 > 1）。
+    first_index: Index,
+    /// 快照最后包含的任期（first_index-1 对应的 term；无快照时为 0）。
+    snapshot_term: Term,
     /// 最后一条已存条目的索引。
     last_index: Index,
     /// 最后一条已存条目的任期。
@@ -147,7 +164,7 @@ impl Log {
             .map(decode_value)
             .transpose()?
             .unwrap_or((0, None));
-        let (last_index, last_term) = engine
+        let (mut last_index, mut last_term) = engine
             .scan_dyn((
                 Bound::Included(Key::Entry(0).encode()),
                 Bound::Included(Key::Entry(u64::MAX).encode()),
@@ -158,15 +175,143 @@ impl Log {
             .transpose()?
             .map(|e| (e.index, e.term))
             .unwrap_or((0, 0));
-        let (commit_index, commit_term) = engine
+        let (mut commit_index, mut commit_term) = engine
             .get(&Key::CommitIndex.encode())?
             .as_deref()
             .map(decode_value)
             .transpose()?
             .unwrap_or((0, 0));
+        let (snap_index, snapshot_term) = engine
+            .get(&Key::SnapshotMeta.encode())?
+            .as_deref()
+            .map(decode_value)
+            .transpose()?
+            .unwrap_or((0, 0));
+        // first_index = 快照之后下一条；无快照且无日志时为 1。
+        let mut first_index = if snap_index > 0 {
+            snap_index + 1
+        } else if last_index == 0 {
+            1
+        } else {
+            // 扫描最小 entry 索引
+            engine
+                .scan_dyn((
+                    Bound::Included(Key::Entry(0).encode()),
+                    Bound::Included(Key::Entry(u64::MAX).encode()),
+                ))
+                .next()
+                .transpose()?
+                .map(|(_, v)| Entry::decode(&v))
+                .transpose()?
+                .map(|e| e.index)
+                .unwrap_or(1)
+        };
+
+        // 快照之后若无剩余日志条目，last/commit 至少要覆盖快照基座。
+        if snap_index > 0 {
+            if last_index < snap_index {
+                last_index = snap_index;
+                last_term = snapshot_term;
+            }
+            if commit_index < snap_index {
+                commit_index = snap_index;
+                commit_term = snapshot_term;
+            }
+            if first_index != snap_index + 1 {
+                first_index = snap_index + 1;
+            }
+        }
 
         let fsync = true; // 默认开启 fsync
-        Ok(Self { engine, term, vote, last_index, last_term, commit_index, commit_term, fsync })
+        Ok(Self {
+            engine,
+            term,
+            vote,
+            first_index,
+            snapshot_term,
+            last_index,
+            last_term,
+            commit_index,
+            commit_term,
+            fsync,
+        })
+    }
+
+    /// 日志中仍保留的第一条索引。
+    pub fn get_first_index(&self) -> Index {
+        self.first_index
+    }
+
+    /// 快照基座：`(last_included_index, last_included_term)`；无快照时 `(0,0)`。
+    pub fn get_snapshot_meta(&self) -> (Index, Term) {
+        if self.first_index <= 1 {
+            (0, 0)
+        } else {
+            (self.first_index - 1, self.snapshot_term)
+        }
+    }
+
+    /// 截断并删除 `<= last_included_index` 的日志条目（快照后压缩）。
+    pub fn compact_to(&mut self, last_included_index: Index, last_included_term: Term) -> Result<()> {
+        assert!(last_included_index <= self.commit_index, "compact beyond commit");
+        if last_included_index + 1 <= self.first_index && last_included_index > 0 {
+            return Ok(());
+        }
+        for i in self.first_index..=last_included_index {
+            self.engine.delete(&Key::Entry(i).encode())?;
+        }
+        self.engine.set(
+            &Key::SnapshotMeta.encode(),
+            encode_value(&(last_included_index, last_included_term)),
+        )?;
+        if self.fsync {
+            self.engine.flush()?;
+        }
+        self.first_index = last_included_index + 1;
+        self.snapshot_term = last_included_term;
+        if self.last_index < last_included_index {
+            self.last_index = last_included_index;
+            self.last_term = last_included_term;
+        }
+        Ok(())
+    }
+
+    /// 安装快照后重置日志：丢弃全部条目，仅保留快照基座。
+    pub fn reset_with_snapshot(
+        &mut self,
+        last_included_index: Index,
+        last_included_term: Term,
+    ) -> Result<()> {
+        // 删除所有 entry
+        let to_delete: Vec<_> = self
+            .engine
+            .scan_dyn((
+                Bound::Included(Key::Entry(0).encode()),
+                Bound::Included(Key::Entry(u64::MAX).encode()),
+            ))
+            .filter_map(|r| r.ok().map(|(k, _)| k))
+            .collect();
+        for k in to_delete {
+            self.engine.delete(&k)?;
+        }
+        self.engine.set(
+            &Key::SnapshotMeta.encode(),
+            encode_value(&(last_included_index, last_included_term)),
+        )?;
+        self.commit_index = last_included_index;
+        self.commit_term = last_included_term;
+        self.engine.set(
+            &Key::CommitIndex.encode(),
+            encode_value(&(self.commit_index, self.commit_term)),
+        )?;
+        if self.fsync {
+            self.engine.flush()?;
+        }
+        self.first_index = last_included_index + 1;
+        self.snapshot_term = last_included_term;
+        self.last_index = last_included_index;
+        self.last_term = last_included_term;
+        Ok(())
     }
 
     /// 控制是否对写入做 fsync。关闭可能违反 Raft 保证，见 fsync 字段注释。
@@ -211,8 +356,31 @@ impl Log {
     /// 在当前任期向日志追加命令并刷盘，返回其索引。
     /// None 表示 noop 命令，通常在 Raft 领导者变更后使用。
     pub fn append(&mut self, command: Option<Vec<u8>>) -> Result<Index> {
+        self.append_entry(command, None)
+    }
+
+    /// 追加一条成员配置变更日志。
+    pub fn append_membership(&mut self, membership: MembershipEntry) -> Result<Index> {
+        self.append_entry(None, Some(membership))
+    }
+
+    /// 追加完整条目字段。
+    pub fn append_entry(
+        &mut self,
+        command: Option<Vec<u8>>,
+        membership: Option<MembershipEntry>,
+    ) -> Result<Index> {
         assert!(self.term > 0, "can't append entry in term 0");
-        let entry = Entry { index: self.last_index + 1, term: self.term, command };
+        assert!(
+            command.is_none() || membership.is_none(),
+            "command and membership are mutually exclusive"
+        );
+        let entry = Entry {
+            index: self.last_index + 1,
+            term: self.term,
+            command,
+            membership,
+        };
         self.engine.set(&Key::Entry(entry.index).encode(), entry.encode())?;
         if self.fsync {
             self.engine.flush()?;
@@ -220,6 +388,18 @@ impl Log {
         self.last_index = entry.index;
         self.last_term = entry.term;
         Ok(entry.index)
+    }
+
+    /// 从日志中扫描最新的成员配置条目（若有）。
+    pub fn latest_membership(&mut self) -> Result<Option<(Index, MembershipEntry)>> {
+        let mut found = None;
+        for entry in self.scan(1..=self.last_index) {
+            let entry = entry?;
+            if let Some(m) = entry.membership {
+                found = Some((entry.index, m));
+            }
+        }
+        Ok(found)
     }
 
     /// 提交到给定索引（含）。该索引必须存在且不早于当前 commit 索引。
@@ -250,6 +430,13 @@ impl Log {
         if index == 0 || index > self.last_index {
             return Ok(false);
         }
+        // 快照基座
+        if index + 1 == self.first_index && term == self.snapshot_term && index > 0 {
+            return Ok(true);
+        }
+        if index < self.first_index {
+            return Ok(false);
+        }
         if (index, term) == (self.last_index, self.last_term) {
             return Ok(true);
         }
@@ -258,16 +445,22 @@ impl Log {
 
     /// 返回给定索引范围内的日志条目迭代器。
     pub fn scan(&mut self, range: impl RangeBounds<Index>) -> Iterator<'_> {
-        let from = match range.start_bound() {
-            Bound::Excluded(&index) => Bound::Excluded(Key::Entry(index).encode()),
-            Bound::Included(&index) => Bound::Included(Key::Entry(index).encode()),
-            Bound::Unbounded => Bound::Included(Key::Entry(0).encode()),
+        // 规范化边界，避免 BTreeMap range start > end panic。
+        let start_idx = match range.start_bound() {
+            Bound::Excluded(&i) => i.saturating_add(1),
+            Bound::Included(&i) => i,
+            Bound::Unbounded => 0,
         };
-        let to = match range.end_bound() {
-            Bound::Excluded(&index) => Bound::Excluded(Key::Entry(index).encode()),
-            Bound::Included(&index) => Bound::Included(Key::Entry(index).encode()),
-            Bound::Unbounded => Bound::Included(Key::Entry(Index::MAX).encode()),
+        let end_idx_inclusive = match range.end_bound() {
+            Bound::Excluded(&i) => i.saturating_sub(1),
+            Bound::Included(&i) => i,
+            Bound::Unbounded => Index::MAX,
         };
+        if start_idx > end_idx_inclusive {
+            return Iterator::new(Box::new(std::iter::empty()));
+        }
+        let from = Bound::Included(Key::Entry(start_idx).encode());
+        let to = Bound::Included(Key::Entry(end_idx_inclusive).encode());
         Iterator::new(self.engine.scan_dyn((from, to)))
     }
 
@@ -323,7 +516,10 @@ impl Log {
             if entry.term != entries[0].term {
                 break;
             }
-            assert!(entry.command == entries[0].command, "command mismatch at {entry:?}");
+            assert!(
+                entry.command == entries[0].command && entry.membership == entries[0].membership,
+                "command/membership mismatch at {entry:?}"
+            );
             entries = &entries[1..];
         }
         drop(scan);

@@ -1,0 +1,25 @@
+# 单节点模式：无 peers，进程启动后立即成为领导者。
+# 启动：
+#   cargo run --bin raft-node -- --config config/single.yaml
+# 使用：
+#   cargo run --bin raft-cli -- --peers 127.0.0.1:7001 put a apple
+#   cargo run --bin raft-cli -- --peers 127.0.0.1:7001 get a
+#   cargo run --bin raft-cli -- --peers 127.0.0.1:7001 status
+
+node:
+  id: 1
+  listen: "127.0.0.1:7001"
+  data_dir: "data/single"
+
+# peers 省略或写空列表 [] 均可
+peers: []
+
+options:
+  heartbeat_interval: 2
+  election_timeout_min: 5
+  election_timeout_max: 10
+  max_append_entries: 100
+  # 单节点下 pre_vote/check_quorum 无实际同伴，可开可关
+  pre_vote: true
+  check_quorum: true
+  snapshot_threshold: 1000

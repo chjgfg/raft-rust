@@ -25,6 +25,21 @@ pub struct Envelope {
 /// 一条消息及其响应走各自独立的出站 TCP 连接。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Message {
+    /// 预投票请求（Pre-vote）：不提升任期、不持久化投票。
+    /// 用于在真正选举前确认能否获得多数，避免分区节点抬升任期打断稳定领导。
+    PreCampaign {
+        /// 候选人最后一条日志的索引。
+        last_index: Index,
+        /// 候选人最后一条日志的任期。
+        last_term: Term,
+    },
+
+    /// 预投票响应。不持久化。
+    PreCampaignResponse {
+        /// 为 true 表示授予预选票。
+        vote: bool,
+    },
+
     /// 候选人向同伴拉票竞选领导者。
     /// 仅当候选人的日志至少与投票者一样新时才会被授予选票。
     Campaign {
@@ -112,12 +127,25 @@ pub enum Message {
         request: Request,
     },
 
-    /// 客户端响应。
+    /// 客户端响应，通常透传给状态机。
     ClientResponse {
         /// 对应原始 ClientRequest 的 ID。
         id: RequestID,
         /// 响应，或错误。
         response: Result<Response>,
+    },
+
+    /// 安装快照（整包；教学实现不分块）。
+    InstallSnapshot {
+        last_included_index: Index,
+        last_included_term: Term,
+        data: Vec<u8>,
+        membership: crate::raft::membership::MembershipEntry,
+    },
+
+    /// 快照安装确认。
+    InstallSnapshotResponse {
+        last_included_index: Index,
     },
 }
 
@@ -137,8 +165,18 @@ pub enum Request {
     Read(Vec<u8>),
     /// 状态机写命令，经 `State::apply` 执行。复制到所有节点，结果必须确定。
     Write(Vec<u8>),
+    /// 带客户端 session 的写：日志中保存 (client_id, seq)，apply 时去重。
+    WriteSession {
+        client_id: uuid::Uuid,
+        seq: u64,
+        command: Vec<u8>,
+    },
     /// 向领导者查询 Raft 集群状态。
     Status,
+    /// 变更集群投票成员为目标集合（联合共识）。
+    ChangeMembership {
+        voters: std::collections::HashSet<NodeID>,
+    },
 }
 
 /// 客户端响应。外层用 Result 表示错误。
@@ -150,6 +188,8 @@ pub enum Response {
     Write(Vec<u8>),
     /// 当前 Raft 领导者状态。
     Status(Status),
+    /// 成员变更已提出（提交索引，可能是 Joint 条目索引）。
+    ChangeMembership { index: Index },
 }
 
 /// Raft 集群状态，由领导者生成。
@@ -167,4 +207,7 @@ pub struct Status {
     pub applied_index: Index,
     /// 日志存储引擎状态。
     pub storage: storage::Status,
+    /// 当前生效的投票成员集合。
+    #[serde(default)]
+    pub voters: std::collections::BTreeSet<NodeID>,
 }

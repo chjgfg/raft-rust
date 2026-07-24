@@ -1,15 +1,24 @@
 [package]
 name = "raft-rust"
 version = "0.1.0"
-description = "Standalone Raft consensus library extracted from toydb (erikgrinaker/toydb)"
-authors = ["Erik Grinaker <erik@grinaker.org>"]
+description = "Standalone Raft consensus library in Rust"
+authors = ["raft-rust contributors"]
 license = "Apache-2.0"
 edition = "2024"
 publish = false
+default-run = "raft-node"
 
 [lib]
 name = "raft_rust"
 path = "src/lib.rs"
+
+[[bin]]
+name = "raft-node"
+path = "src/bin/raft_node.rs"
+
+[[bin]]
+name = "raft-cli"
+path = "src/bin/raft_cli.rs"
 
 [[example]]
 name = "kv_cluster"
@@ -18,12 +27,14 @@ path = "examples/kv_cluster.rs"
 [dependencies]
 bincode = { version = "2.0", features = ["serde"] }
 crossbeam = { version = "0.8", features = ["crossbeam-channel"] }
+env_logger = "0.11"
+fs4 = "0.13"
 itertools = "0.14"
 log = "0.4"
 rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
 uuid = { version = "1.0", features = ["serde", "v4"] }
 
 [dev-dependencies]
-env_logger = "0.11"
 serde_json = "1.0"

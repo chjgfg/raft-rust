@@ -70,6 +70,17 @@ impl State for Kv {
             c @ Command::Put { .. } => panic!("{c} submitted as read command"),
         }
     }
+
+    fn snapshot(&self) -> Result<Vec<u8>> {
+        Ok(encode(&(self.applied_index, &self.data)))
+    }
+
+    fn restore(&mut self, snapshot: &[u8], index: Index) -> Result<()> {
+        let (applied, data): (Index, BTreeMap<String, String>) = decode(snapshot)?;
+        self.applied_index = index.max(applied);
+        self.data = data;
+        Ok(())
+    }
 }
 
 /// 键值命令。先用 [`encode`] 编码，再包装进 [`super::Request::Read`] / [`super::Request::Write`]。

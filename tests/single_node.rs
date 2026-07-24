@@ -1,4 +1,4 @@
-//! 使用 Memory 存储的单节点 Raft 冒烟测试。
+//! 使用 BitCask 存储的单节点 Raft 冒烟测试。
 
 use std::collections::HashSet;
 
@@ -6,12 +6,21 @@ use crossbeam::channel;
 use raft_rust::error::Result;
 use raft_rust::raft::kv::{self, Kv};
 use raft_rust::raft::{Envelope, Log, Message, Node, Options, Request, Response};
-use raft_rust::storage::Memory;
+use raft_rust::storage::BitCask;
 use uuid::Uuid;
+
+fn temp_engine() -> BitCask {
+    let path = std::env::temp_dir().join(format!(
+        "raft-sn-{}-{}.log",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    BitCask::new(path).expect("bitcask")
+}
 
 fn make_node() -> Result<(Node, channel::Receiver<Envelope>)> {
     let (tx, rx) = channel::unbounded();
-    let log = Log::new(Box::new(Memory::new()))?;
+    let log = Log::new(Box::new(temp_engine()))?;
     // 单节点集群（无同伴）创建时立即成为领导者。
     let node = Node::new(1, HashSet::new(), log, Kv::new(), tx, Options::default())?;
     Ok((node, rx))
@@ -100,9 +109,9 @@ fn single_node_becomes_leader_and_serves_kv() -> Result<()> {
 }
 
 #[test]
-fn memory_engine_roundtrip() -> Result<()> {
+fn bitcask_engine_roundtrip() -> Result<()> {
     use raft_rust::storage::Engine;
-    let mut eng = Memory::new();
+    let mut eng = temp_engine();
     eng.set(b"a", b"1".to_vec())?;
     eng.set(b"b", b"2".to_vec())?;
     assert_eq!(eng.get(b"a")?, Some(b"1".to_vec()));
@@ -115,7 +124,7 @@ fn memory_engine_roundtrip() -> Result<()> {
 
 #[test]
 fn log_append_commit_scan() -> Result<()> {
-    let mut log = Log::new(Box::new(Memory::new()))?;
+    let mut log = Log::new(Box::new(temp_engine()))?;
     log.set_term_vote(1, Some(1))?;
     let i1 = log.append(Some(b"one".to_vec()))?;
     let i2 = log.append(Some(b"two".to_vec()))?;
