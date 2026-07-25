@@ -16,12 +16,21 @@
 | 04 | [数据存取全流程](./04-数据存取全流程.md) | 从节点到主节点到日志到 Kv |
 | 05 | [节点角色与职责](./05-节点角色与职责.md) | Follower / Candidate / Leader 各干什么 |
 | 06 | [BitCask 与日志键空间](./06-BitCask与日志键空间.md) | 磁盘上键值长什么样 |
+| 07 | [日志复制与冲突修复](./07-日志复制与冲突修复.md) | Append / reject / probe / splice |
+| 08 | [线性一致读](./08-线性一致读.md) | read_seq 多数确认与门闩 |
+| 09 | [Session 与 CLI 幂等](./09-Session与CLI幂等.md) | client_id / seq / `.raft-cli-session` |
+| 10 | [成员变更与领导转移](./10-成员变更与领导转移.md) | Joint → Simple；去掉领导 step down |
+| 11 | [快照与落后追赶](./11-快照与落后追赶.md) | compact、InstallSnapshot |
+| 12 | [配置部署与进程运行时](./12-配置部署与进程运行时.md) | YAML、raft-node/cli 主循环 |
+| 13 | [故障场景与测试对照](./13-故障场景与测试对照.md) | 分区/杀主/重启 ↔ tests |
+| 14 | [FAQ 与能力边界](./14-FAQ与能力边界.md) | 常见问题与不做清单 |
 
 ```text
 入门 01–02
 核心路径 03–04
-职责对照 05
-存储加深 06
+职责与存储 05–06
+协议加深 07–11
+工程 12–14
 ```
 
 ---
@@ -39,6 +48,6 @@ cargo run --bin raft-node -- --config config/node2.yaml
 cargo run --bin raft-node -- --config config/node3.yaml
 ```
 
-配置与 CLI 细节见仓库根 [README.md](../../README.md)。
+配置与 CLI 细节见仓库根 [README.md](../../README.md)，或 [12 配置部署](./12-配置部署与进程运行时.md)。
 
 源码内 `//!` 注释与文档互补；**以代码为准**。
