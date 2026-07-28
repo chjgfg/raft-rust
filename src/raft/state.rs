@@ -1,4 +1,6 @@
+// 日志条目与索引
 use super::{Entry, Index};
+// 统一 Error/Result
 use crate::error::Result;
 
 /// 由 Raft 管理的状态机。
@@ -16,11 +18,16 @@ pub trait State: Send {
 
     /// 导出快照字节（含足以恢复的完整状态）。
     fn snapshot(&self) -> Result<Vec<u8>> {
+        // 默认无快照内容
         Ok(Vec::new())
+    // 当前作用域结束
     }
 
     /// 从快照恢复，并将 applied 索引设为 `index`。
     fn restore(&mut self, _snapshot: &[u8], _index: Index) -> Result<()> {
+        // 默认空实现成功返回
         Ok(())
+    // 当前作用域结束
     }
+// 当前作用域结束
 }

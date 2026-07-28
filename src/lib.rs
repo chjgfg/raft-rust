@@ -28,22 +28,39 @@
 //! // 通过 node.tick()? 与 node.step(envelope)? 驱动
 //! ```
 
+// 默认开启全部 clippy lint
 #![warn(clippy::all)]
+// Message/Envelope 等变体较大，允许 large_enum_variant
 #![allow(clippy::large_enum_variant)]
+// 允许模块与类型同名风格
 #![allow(clippy::module_inception)]
+// 复杂通道类型签名过长时允许
 #![allow(clippy::type_complexity)]
 
+// 进程内多节点编排模块
 pub mod cluster;
+// YAML 节点配置模块
 pub mod config;
+// TCP+bincode 网络传输模块
 pub mod net;
+// 统一错误类型模块
 pub mod error;
+// Raft 协议核心模块
 pub mod raft;
+// 日志持久化引擎模块
 pub mod storage;
 
+// 对外重导出 Error/Result
 pub use error::{Error, Result};
+// 对外重导出 Raft 主 API
 pub use raft::{
+    // 协议类型：信封、日志、消息、节点与请求响应
     encode_session, Envelope, Entry, Index, Key, Log, Membership, MembershipEntry, Message, Node,
+    // 节点 ID、选项、会话与状态机相关类型
     NodeID, Options, Request, Response, SessionState, State, Status, Term, TICK_INTERVAL,
+// 当前作用域结束
 };
+// 对外重导出演示用 KV 状态机
 pub use raft::kv;
+// 对外重导出 BitCask 与 Engine
 pub use storage::{BitCask, Engine};

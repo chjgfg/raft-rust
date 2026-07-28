@@ -165,32 +165,51 @@
 //! * 无拒绝提示：若跟随者日志分叉，领导者逐条探测直到找到匹配。
 //!   复制协议可用拒绝提示扩展（论文 5.3 节）。
 
+// 演示用 KV 状态机
 pub mod kv;
+// Raft 持久化日志（crate 内私有）
 mod log;
+// 联合共识成员配置
 pub mod membership;
+// 节点间消息与客户端请求类型
 mod message;
+// 角色状态机与 Node 驱动
 mod node;
+// 客户端 session 写去重
 pub mod session;
+// 应用状态机 trait
 mod state;
 
+// 选举超时默认区间类型
 use std::ops::Range;
+// tick 墙钟间隔
 use std::time::Duration;
 
+// 导出日志条目与索引类型
 pub use log::{Entry, Index, Key, Log};
+// 导出成员配置类型
 pub use membership::{Membership, MembershipEntry, MembershipState};
+// 导出协议消息与状态查询类型
 pub use message::{Envelope, Message, ReadSequence, Request, RequestID, Response, Status};
+// 导出节点与运行参数
 pub use node::{Node, NodeID, Options, Term, Ticks};
+// 导出会话包装状态机与编码辅助
 pub use session::{encode_session, SessionState};
+// 导出状态机 trait
 pub use state::State;
 
 /// Raft tick 的时间间隔，即 Raft 的时间单位。
+// 约 100ms 一拍，心跳/选举超时以 tick 计
 pub const TICK_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 领导者心跳间隔（以 tick 计）。
+// 模块内默认；可被 Options 覆盖
 const HEARTBEAT_INTERVAL: Ticks = 4;
 
 /// 默认选举超时范围（以 tick 计）。为避免选举平票，节点在此区间内随机取值。
+// 半开区间 [10, 20)
 const ELECTION_TIMEOUT_RANGE: Range<Ticks> = 10..20;
 
 /// 单条 Append 消息中最多发送的日志条目数。
+// 限制单次 RPC 体积，避免大包阻塞
 const MAX_APPEND_ENTRIES: usize = 100;
