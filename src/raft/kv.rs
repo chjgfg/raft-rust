@@ -3,7 +3,7 @@
 //! 命令与响应均为 bincode 编码的 `Vec<u8>`，与 [`super::State`] 的不透明字节接口一致。
 
 // 有序 map：扫描结果确定、便于测试
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, panic};
 // 命令/响应的可读显示
 use std::fmt::Display;
 

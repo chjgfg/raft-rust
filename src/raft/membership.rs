@@ -1,7 +1,7 @@
 //! Raft 集群成员配置（含联合共识 Joint Consensus）。
 
 // 有序集合：确定性序列化与 quorum 计算
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, matches};
 
 // 成员配置写入日志，需可序列化
 use serde::{Deserialize, Serialize};
