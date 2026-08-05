@@ -123,7 +123,7 @@ fn remove_voter_joint() -> Result<()> {
 // 目标配置不含旧主：旧主 step down，新主接管后数据与写能力保留
 fn remove_leader_steps_down() -> Result<()> {
     // mut：成员变更过程中可能涉及节点集合变化
-    let mut cluster = Cluster::spawn(&[1, 2, 3]);
+    let cluster = Cluster::spawn(&[1, 2, 3]);
     // 成员变更与后续读写客户端
     let mut client = cluster.client();
     // 记录即将被移出配置的领导者
