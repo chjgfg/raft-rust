@@ -5,7 +5,7 @@ description = "Standalone Raft consensus library in Rust"
 authors = ["raft-rust contributors"]
 license = "Apache-2.0"
 edition = "2024"
-publish = false
+publish = true
 default-run = "raft-node"
 
 [lib]
