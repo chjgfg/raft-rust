@@ -28,7 +28,7 @@ Follower **转发** `ClientRequest` 到 Leader；真正写日志与线性读只�
 ## 4. `.raft-cli-session` 是什么？在哪？
 
 CLI 的 **client_id + last_seq**，用于写幂等。路径 = **运行 CLI 时的 cwd** 下的 `.raft-cli-session`。  
-只有 **`put`** 会创建/更新；只开 node 或只 status **不会有**。见 [09](./09-Session与CLI幂等.md)。
+只有 **`put`** 会创建/更新；只开 node 或只 `status` **不会有**。见 [09](./09-Session与CLI幂等.md)。
 
 ---
 
@@ -132,4 +132,4 @@ client.put("k","v")?;
 
 ---
 
-> **导航：** [← 13](./13-故障场景与测试对照.md) · [索引](./README.md)
+> **导航：** [← 13. 故障场景与测试对照](./13-故障场景与测试对照.md) · [索引](./README.md)

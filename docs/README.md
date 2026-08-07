@@ -1,4 +1,4 @@
-# raft-rust 文档
+# raft-rust
 
 > **仅供学习使用。** 本项目是 Raft 共识与进程内/多进程 KV 演示的教学实现，**不是**生产级协调服务。
 
@@ -9,24 +9,29 @@
 
 ## 文档导航
 
-| 入口 | 说明 |
+| 语言 | 入口 |
 |------|------|
-| **[中文专题索引](./zh/README.md)** | 按序号 01–14 阅读 |
-| [项目 README](../README.md) | 快速启动、配置字段、CLI |
+| **中文专题** | **[zh/README.md](./zh/README.md)** — 学习路径 01–14 |
+| **英文专题** | **[en/README.md](./en/README.md)** — 学习路径 01–14（ASCII 文件名） |
+| 英文项目说明 | **[根目录 README.md](../README.md)** |
 
-### 推荐路径
+建议先读（中文）：
 
-| 目标 | 顺序 |
-|------|------|
-| 先跑起来再看原理 | 根 README → [12](./zh/12-配置部署与进程运行时.md) → [01](./zh/01-架构总览.md) |
-| 搞懂选举 | [01](./zh/01-架构总览.md) → [03](./zh/03-选举全流程.md) → [05](./zh/05-节点角色与职责.md) |
-| 搞懂 put/get 数据流 | [02](./zh/02-消息与数据结构.md) → [04](./zh/04-数据存取全流程.md) → [06](./zh/06-BitCask与日志键空间.md) → [08](./zh/08-线性一致读.md) |
-| 复制/成员/快照 | [07](./zh/07-日志复制与冲突修复.md) → [10](./zh/10-成员变更与领导转移.md) → [11](./zh/11-快照与落后追赶.md) |
-| 排错与边界 | [13](./zh/13-故障场景与测试对照.md) → [14](./zh/14-FAQ与能力边界.md) |
+1. [01 架构总览](./zh/01-架构总览.md)  
+2. [04 数据存取全流程](./zh/04-数据存取全流程.md)  
+3. 再按 [中文专题索引](./zh/README.md) 进入选举、复制、快照等章节  
 
 ---
 
-## 一句话数据路径
+## 这是什么项目？
+
+`raft-rust` 是一个**体量可控、可读性强**的 Raft 实现，你可以：
+
+- 作为 **Rust 库嵌入**（`Node::step` / `Node::tick` 驱动纯协议核心 + 可插拔存储 / 状态机）；  
+- 用 **`raft-node`** 跑单节点或三节点集群；  
+- 用 **`raft-cli`** 发 `put` / `get` / `scan` / `status` / `members`。  
+
+它把经典 Raft 链路完整串了一遍：
 
 ```text
 raft-cli
@@ -40,44 +45,193 @@ raft-cli
   → ClientResponse 原路返回
 ```
 
-读路径**不进日志**：只在 Leader 上做多数确认后的 `State::read`。
+**没有**生产级 TLS，**没有**分块快照流，**没有**完整运维面。全部用于学习 Raft 与本地原型。
+
+### 适合用来做什么
+
+- 系统学习「Raft 内部长什么样」  
+- 对照文档只啃一层（只看选举、只看复制、只看快照）  
+- 在单机多进程里试验选主 / put/get / 分区 / 杀主  
+- 在测试里用 `cluster::Cluster` 做进程内故障注入  
+
+### 不适合用来做什么
+
+| 场景 | 原因 |
+|------|------|
+| 生产业务协调服务 | 缺 TLS / 认证、分块快照、运维工具 |
+| 高可用强依赖 | 教学向实现，未做生产加固 |
+| 追求完整 Raft 功能面 | 刻意简化（见 [14 FAQ](./zh/14-FAQ与能力边界.md)） |
+
+需要生产级共识请用 etcd / TiKV 等成熟系统。  
+**本仓库的目标是帮你看懂 Raft，而不是替你扛生产流量。**
 
 ---
 
-## 专题一览（01–14）
+## 能力一览（学习向功能面）
 
-| 序号 | 文档 |
+| 类别 | 支持 |
 |------|------|
-| 01 | [架构总览](./zh/01-架构总览.md) |
-| 02 | [消息与数据结构](./zh/02-消息与数据结构.md) |
-| 03 | [选举全流程](./zh/03-选举全流程.md) |
-| 04 | [数据存取全流程](./zh/04-数据存取全流程.md) |
-| 05 | [节点角色与职责](./zh/05-节点角色与职责.md) |
-| 06 | [BitCask 与日志键空间](./zh/06-BitCask与日志键空间.md) |
-| 07 | [日志复制与冲突修复](./zh/07-日志复制与冲突修复.md) |
-| 08 | [线性一致读](./zh/08-线性一致读.md) |
-| 09 | [Session 与 CLI 幂等](./zh/09-Session与CLI幂等.md) |
-| 10 | [成员变更与领导转移](./zh/10-成员变更与领导转移.md) |
-| 11 | [快照与落后追赶](./zh/11-快照与落后追赶.md) |
-| 12 | [配置部署与进程运行时](./zh/12-配置部署与进程运行时.md) |
-| 13 | [故障场景与测试对照](./zh/13-故障场景与测试对照.md) |
-| 14 | [FAQ 与能力边界](./zh/14-FAQ与能力边界.md) |
+| **共识** | 选主、日志复制、多数提交 |
+| **读** | 领导者线性一致读（多数确认） |
+| **Pre-vote / CheckQuorum** | `Options` 可开关，减轻分区干扰 |
+| **成员变更** | 联合共识（Joint Consensus） |
+| **领导转移** | `ChangeMembership` 可去掉当前领导，Simple 提交后旧领导 step down |
+| **写去重** | `WriteSession(client_id, seq)` + `SessionState` |
+| **快照** | `snapshot` / `InstallSnapshot` / 日志 `compact_to` |
+| **存储** | **BitCask** 日志结构引擎（`data_dir/bitcask.log`） |
+| **网络** | TCP 帧：`WireMsg::{Raft, Client, ClientReply}` |
+| **测试用进程内集群** | `cluster::Cluster`（channel + 故障注入） |
+
+### 刻意限制（为了代码还能读）
+
+- 明文 TCP，**无 TLS / 认证**
+- 快照整包发送，不分块流式
+- 无自动领导优雅迁移 RPC（通过成员变更去掉旧领导实现 step down）
+- 无生产级运维能力（监控、动态配置热更新等）
 
 ---
 
-## 源码对照
+## 怎么用这个项目
 
-| 模块 | 路径 |
-|------|------|
-| 节点状态机 | `src/raft/node.rs` |
-| 消息 | `src/raft/message.rs` |
-| 日志 | `src/raft/log.rs` |
-| KV 状态机 | `src/raft/kv.rs` |
-| Session | `src/raft/session.rs` |
-| 成员 | `src/raft/membership.rs` |
-| TCP | `src/net/` |
-| 节点进程 | `src/bin/raft_node.rs` |
-| CLI | `src/bin/raft_cli.rs` |
-| BitCask | `src/storage/bitcask.rs` |
+### 1）以阅读为主学习（推荐）
 
-**文档与代码不一致时以代码为准。**
+```text
+docs/zh/   中文路径 01 → 14
+docs/en/   英文路径 01 → 14
+```
+
+建议顺序：
+
+1. 架构 + 消息（先建立全局）  
+2. 选举与数据流（核心路径）  
+3. 节点角色与存储（职责与落盘）  
+4. 复制 / 成员 / 快照（协议加深）  
+5. 工程与排错（部署 / 故障 / FAQ）  
+
+### 2）单节点
+
+```bash
+# 需要 Rust 工具链（edition 2024）
+
+cargo run --bin raft-node -- --config config/single.yaml
+```
+
+配置里 **`peers: []`**（或不写同伴），进程启动后**立刻成为 Leader**。
+
+```bash
+# 另一个终端
+cargo run --bin raft-cli -- --peers 127.0.0.1:7001 put a apple
+cargo run --bin raft-cli -- --peers 127.0.0.1:7001 get a
+cargo run --bin raft-cli -- --peers 127.0.0.1:7001 scan
+```
+
+### 3）三节点
+
+三个终端分别启动 `config/node1.yaml` / `node2.yaml` / `node3.yaml`，CLI 写多个 peer：
+
+```bash
+cargo run --bin raft-node -- --config config/node1.yaml
+cargo run --bin raft-node -- --config config/node2.yaml
+cargo run --bin raft-node -- --config config/node3.yaml
+
+cargo run --bin raft-cli -- --peers 127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003 status
+cargo run --bin raft-cli -- --peers 127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003 put b banana
+```
+
+### 4）作为库嵌入
+
+```rust
+use raft_rust::cluster::{wait_for_leader, Cluster};
+
+let cluster = Cluster::spawn(&[1, 2, 3]); // 测试用进程内集群
+let mut client = cluster.client();
+wait_for_leader(&mut client)?;
+client.put("k", "v")?;
+```
+
+或直接使用 `Node` + 自建传输（见 `src/lib.rs` / `src/net`）。
+
+### 5）测试
+
+```bash
+cargo build --bins    # 真多进程测试需要 raft-node 二进制
+cargo test
+```
+
+覆盖范围包括：选主、转发、分区、杀主、丢包/乱序、并发客户端、Pre-vote / CheckQuorum、成员变更、**移除领导（领导转移）**、Session 去重、BitCask、**重启恢复**、**快照截断后重启**、**真多进程**（`tests/multi_process.rs`）。
+
+进程内演示（非部署路径）：
+
+```bash
+cargo run --example kv_cluster
+```
+
+---
+
+## 项目结构
+
+```text
+raft-rust/
+├── README.md              ← 英文项目入口
+├── docs/
+│   ├── README.md          ← 中文项目入口（本页）
+│   ├── zh/                ← 中文设计文档 01–14
+│   │   └── README.md      ← 中文专题索引
+│   └── en/                ← 英文设计文档 01–14
+│       └── README.md      ← 英文专题索引
+├── src/
+│   ├── lib.rs             # crate 根
+│   ├── bin/raft_node.rs   # 节点进程
+│   ├── bin/raft_cli.rs    # 命令行客户端
+│   ├── net/               # TCP + bincode
+│   ├── cluster/           # 进程内集群（测试 / example）
+│   ├── config.rs          # 节点 YAML 加载
+│   ├── raft/              # 协议：node / log / membership / session / kv
+│   └── storage/           # Engine + BitCask
+├── config/
+│   ├── single.yaml        # 单节点
+│   └── node1.yaml … node3.yaml
+├── tests/                 # 单元与集成测试
+└── examples/kv_cluster.rs # 进程内三节点演示
+```
+
+| 二进制 | 路径 | 用途 |
+|--------|------|------|
+| `raft-node` | `src/bin/raft_node.rs` | 节点进程（单节点或多节点中的一员） |
+| `raft-cli` | `src/bin/raft_cli.rs` | 命令行客户端 |
+
+---
+
+## 学习建议
+
+1. **边读边开终端** — 用 `raft-cli status` 看任期与提交位点，改配置再观察变化。  
+2. **单节点先跑通**，关心选主与复制再用三节点。  
+3. **跟着编号文档走** — 每篇都标明对应源码路径。  
+4. **文档与代码不一致时以代码为准** — 这是活的学习仓库。  
+5. **不要把本项目部署成生产协调服务，也不要存你丢不起的数据。**
+
+---
+
+## 开发
+
+```bash
+cargo build --bins
+cargo test
+cargo run --example kv_cluster
+```
+
+常见分支（以远程为准）：`main`、`docs`。
+
+---
+
+## 许可证
+
+`Cargo.toml` 声明 `Apache-2.0`。实现紧贴 [Raft 论文](https://raft.github.io/raft.pdf)，并包含成员变更、Pre-vote、快照、多进程部署等扩展。
+
+---
+
+## 再次声明
+
+本仓库是一个**学习项目**。  
+用途是 **阅读、实验、教学与自学**。  
+**请勿**当作生产级协调服务使用，也**请勿**假设它具备工业级可靠性或兼容性。
