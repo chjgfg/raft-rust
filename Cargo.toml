@@ -1,6 +1,6 @@
 [package]
 name = "raft-rust"
-version = "0.1.0"
+version = "0.1.1"
 description = "Standalone Raft consensus library in Rust"
 authors = ["raft-rust contributors"]
 license = "Apache-2.0"
